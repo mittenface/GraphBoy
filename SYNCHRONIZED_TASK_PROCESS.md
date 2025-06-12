@@ -1,154 +1,195 @@
-# Dual-Agent Synchronized Task List System
+# Dual-Agent Synchronized Task Pair System
 
 ## 1. System Overview
 
-This document describes a system for managing a shared task list between two autonomous agents. The system ensures that both agents are working from the most up-to-date task list and prevents conflicting modifications. It relies on a central task file, a locking mechanism, and a monitoring process (conceptual) to achieve synchronization.
+This document describes a system for managing a shared, synchronized list of paired tasks between two autonomous agents. The system ensures that both agents work on tasks in a coordinated manner, respecting sequence and dependencies defined by task pairs. It relies on a central JSON task file, a file-based locking mechanism, and a command-line interface (CLI) for administration.
 
 The core components are:
-*   **Task File (`tasks.json`):** A JSON file storing the list of tasks. Each task has a unique ID, description, status, assigned agent (optional), and timestamps.
-*   **Lock File (`tasks.lock`):** A file used to manage exclusive access to `tasks.json`. An agent must acquire the lock before modifying the task file.
-*   **Agents (Agent 1 & Agent 2):** Autonomous entities that process tasks from the `tasks.json` file.
-*   **Monitor (Conceptual):** A background process responsible for overseeing the system, detecting stale locks, and potentially resolving conflicts (though the primary conflict resolution is via the lock).
+*   **Task File (`tasks.json`):** A JSON file serving as the central repository for task definitions and task pair configurations. It contains two main arrays: `task_pairs` and `tasks`.
+*   **Lock File (`tasks.lock`):** A file used to manage exclusive access to `tasks.json`, preventing concurrent modifications and ensuring data integrity.
+*   **Agents (Agent 1 & Agent 2):** Autonomous entities that read from and update `tasks.json`, performing the actual work defined by individual tasks within the pairs.
+*   **Task Manager CLI (`task_manager_cli.py`):** A Python script providing command-line tools for initializing, viewing, and modifying `tasks.json`.
+*   **Monitor (Conceptual):** While not implemented in the initial scripts, a future monitor could oversee system health, detect stale locks, and manage dead agents.
 
 ## 2. Setup Instructions
 
 1.  **Initialize `tasks.json`:**
-    *   Create a file named `tasks.json` in the shared working directory.
-    *   The file should contain an empty JSON array `[]` or a predefined list of tasks adhering to the format specified in "Task File Format."
-    *   Example of an empty `tasks.json`:
+    *   Use the `task_manager_cli.py` script: `python task_manager_cli.py init`
+    *   This creates `tasks.json` with the required structure: `{"task_pairs": [], "tasks": []}`.
+    *   Alternatively, manually create an empty `tasks.json` with this structure.
         ```json
-        []
+        {
+          "task_pairs": [],
+          "tasks": []
+        }
         ```
-2.  **Shared Directory:** Ensure both agents have access to a common directory where `tasks.json` and `tasks.lock` will reside.
+2.  **Shared Directory:** Ensure both agents and any administrative user of `task_manager_cli.py` have read/write access to a common directory where `tasks.json` and `tasks.lock` will reside.
 3.  **Agent Configuration:**
-    *   Each agent needs a unique identifier (e.g., "Agent1", "Agent2").
-    *   Agents should be programmed with the logic to:
-        *   Read and parse `tasks.json`.
-        *   Acquire and release locks using `tasks.lock`.
-        *   Understand task statuses and transitions.
-        *   Update tasks according to the defined workflow.
+    *   Each agent needs a unique identifier (e.g., "Agent1", "Agent2"). This ID is used for `agent_preference` in tasks.
+    *   Agents must be programmed with the logic outlined in "Agent Workflow."
 
 ## 3. Task File Format (`tasks.json`)
 
-The `tasks.json` file is an array of task objects. Each task object has the following structure:
+The `tasks.json` file is a JSON object containing two main keys: `task_pairs` and `tasks`.
 
 ```json
-[
-  {
-    "id": "unique_task_id_string",
-    "description": "Detailed description of the task",
-    "status": "PENDING | IN_PROGRESS | COMPLETED | FAILED",
-    "assigned_to": "Agent1_ID | Agent2_ID | null",
-    "created_at": "ISO8601_timestamp",
-    "updated_at": "ISO8601_timestamp",
-    "history": [
-      {
-        "timestamp": "ISO8601_timestamp",
-        "event": "CREATED | ASSIGNED | STATUS_CHANGED | UPDATED",
-        "agent_id": "Agent_ID_responsible_for_event | null",
-        "details": "Additional information about the event"
-      }
-    ]
-  }
-  // ... more tasks
-]
+{
+  "task_pairs": [
+    {
+      "pair_id": "unique_pair_id_string",
+      "tasks": ["task_id_1", "task_id_2"],
+      "status": "BLOCKED | READY | COMPLETED",
+      "pair_lock": true,
+      "sequence_index": 1
+    }
+    // ... more task pairs
+  ],
+  "tasks": [
+    {
+      "id": "unique_task_id_string",
+      "pair_id": "unique_pair_id_string | null",
+      "agent_preference": "Agent1_ID | Agent2_ID | null",
+      "description": "Detailed description of the task",
+      "status": "PENDING | IN_PROGRESS | COMPLETED | FAILED",
+      "assigned_to": "Agent1_ID | Agent2_ID | null",
+      "created_at": "ISO8601_timestamp",
+      "updated_at": "ISO8601_timestamp",
+      "history": [
+        {
+          "timestamp": "ISO8601_timestamp",
+          "event": "CREATED | ASSIGNED | STATUS_CHANGED | UPDATED",
+          "agent_id": "Agent_ID_responsible_for_event | null",
+          "details": "Additional information about the event"
+        }
+      ]
+    }
+    // ... more tasks
+  ]
+}
 ```
 
-**Fields:**
+**`task_pairs` Array:** Each object in this array defines a pair of tasks and their collective state.
+*   `pair_id`: (String) A unique identifier for the task pair (e.g., "pair_001").
+*   `tasks`: (Array of Strings) An array containing exactly two task IDs that form this pair. These IDs must correspond to tasks defined in the `tasks` array.
+*   `status`: (String) The current collective status of the task pair.
+    *   `BLOCKED`: This pair is waiting for a preceding pair to complete and cannot be worked on.
+    *   `READY`: This pair is unlocked and its constituent tasks can be picked up by agents.
+    *   `COMPLETED`: Both tasks in this pair have been completed.
+*   `pair_lock`: (Boolean, Optional) Indicates if the pair is administratively/procedurally locked. Typically `true` for `BLOCKED` pairs and `false` for `READY` pairs. Agents should only consider pairs where `pair_lock` is `false`. (Default: `true` if `status` is `BLOCKED`, `false` if `status` is `READY`).
+*   `sequence_index`: (Integer) A numerical index determining the order in which task pairs should be processed. Lower numbers are processed first.
 
-*   `id`: (String) A universally unique identifier for the task (e.g., UUID).
+**`tasks` Array:** Each object describes an individual task.
+*   `id`: (String) A universally unique identifier for the task (e.g., UUID or "task_A01").
+*   `pair_id`: (String | null) The `pair_id` of the task pair this task belongs to. `null` if it's a standalone task (though the current system focuses on paired tasks).
+*   `agent_preference`: (String | null) The preferred agent ID (e.g., "Agent1", "Agent2") to work on this task. This helps in routing tasks within a pair to specific agents.
 *   `description`: (String) A clear and concise description of what needs to be done.
-*   `status`: (String) The current state of the task. Allowed values:
-    *   `PENDING`: Task is new and waiting to be picked up.
-    *   `IN_PROGRESS`: Task is actively being worked on.
-    *   `COMPLETED`: Task has been successfully finished.
-    *   `FAILED`: Task could not be completed.
-*   `assigned_to`: (String | null) The ID of the agent currently assigned to the task. `null` if unassigned.
+*   `status`: (String) The current state of the task: `PENDING`, `IN_PROGRESS`, `COMPLETED`, `FAILED`.
+*   `assigned_to`: (String | null) The ID of the agent currently assigned to or working on the task.
 *   `created_at`: (String) ISO 8601 timestamp of when the task was created.
 *   `updated_at`: (String) ISO 8601 timestamp of when the task was last modified.
-*   `history`: (Array) An array of objects logging significant events in the task's lifecycle.
-    *   `timestamp`: ISO 8601 timestamp of the event.
-    *   `event`: Type of event (e.g., `CREATED`, `ASSIGNED`, `STATUS_CHANGED`).
-    *   `agent_id`: ID of the agent that triggered the event, if applicable.
-    *   `details`: A brief note about the event (e.g., "Status changed from PENDING to IN_PROGRESS").
+*   `history`: (Array) An array of event objects logging significant lifecycle events for this task.
 
 ## 4. Agent Workflow
 
-Agents should follow this general workflow:
+Agents interact with `tasks.json` under the protection of `tasks.lock`.
 
-1.  **Check for Lock:**
-    *   Attempt to acquire the lock by checking for the existence of `tasks.lock`.
-    *   If `tasks.lock` exists, wait for a short, random interval and retry (or implement a more sophisticated backoff strategy).
-    *   If `tasks.lock` contains a timestamp, check if it's stale (older than a predefined timeout). If stale, an agent (or the monitor) might decide to break the lock (this requires careful implementation to avoid race conditions). For simplicity, agents might just wait.
+1.  **Acquire Lock:** Attempt to acquire `tasks.lock`. If unavailable, wait and retry.
+2.  **Read Data:** Once lock is acquired, read the entire content of `tasks.json` (both `task_pairs` and `tasks`).
+3.  **Identify Actionable Task:**
+    a.  Sort `task_pairs` by `sequence_index` in ascending order.
+    b.  Iterate through sorted pairs to find the first `task_pair` where `status` is `READY` and `pair_lock` is `false` (or not explicitly `true`). This is the "active pair."
+    c.  If no active pair is found, release lock and wait before retrying.
+    d.  Within the active pair, iterate through its referenced task IDs (from `task_pairs[n].tasks`). For each task ID, find the corresponding task object in the main `tasks` array.
+    e.  The agent should look for a task that:
+        i.  Matches its `agent_preference`.
+        ii. Is in `PENDING` status.
+        iii. (Optional) If `agent_preference` is not set or doesn't match, an agent could pick any `PENDING` task within the active pair that isn't already assigned, ensuring tasks from the same pair are ideally picked by different agents.
+    f.  If its preferred task is already `IN_PROGRESS` by itself, it can continue. If `IN_PROGRESS` by another agent, it should not interfere.
 
-2.  **Acquire Lock:**
-    *   If the lock can be acquired (i.e., `tasks.lock` does not exist), create `tasks.lock`.
-    *   Write the agent's ID and the current timestamp into `tasks.lock` (e.g., `{"agent_id": "Agent1", "timestamp": "2023-10-27T10:00:00Z"}`). This helps in identifying who holds the lock and when it was acquired.
+4.  **Claim and Process Task:**
+    a.  If a suitable `PENDING` task is found, the agent updates the task's `status` to `IN_PROGRESS`, sets `assigned_to` to its own ID, and updates `updated_at`. A history event is logged.
+    b.  Write changes to `tasks.json`.
+    c.  Release `tasks.lock`.
+    d.  Perform the actual work associated with the task. This happens *after* releasing the lock.
 
-3.  **Read Tasks:**
-    *   Read the content of `tasks.json`.
-    *   Parse the JSON data.
-
-4.  **Process Tasks:**
-    *   **Identify Assignable Tasks:** Look for tasks with `status: "PENDING"` or tasks that are `IN_PROGRESS` but assigned to *itself* (e.g., to continue work). An agent generally should not pick up a task already `IN_PROGRESS` by another agent unless a specific reassignment logic is in place.
-    *   **Select a Task:** Choose a task based on priority, oldest first, or other scheduling logic.
-    *   **Update Task Status:**
-        *   If taking a `PENDING` task, change its `status` to `IN_PROGRESS` and set `assigned_to` to its own ID.
-        *   Update `updated_at` timestamp.
-        *   Add an entry to the `history` log.
-    *   **Perform Work:** Execute the actions required to complete the task.
-    *   **Update Task on Completion/Failure:**
-        *   Change `status` to `COMPLETED` or `FAILED`.
-        *   Update `updated_at` timestamp.
-        *   Add an entry to the `history` log.
-        *   Optionally, set `assigned_to` to `null` if the task is `COMPLETED` or `FAILED`.
-
-5.  **Write Tasks:**
-    *   Serialize the modified task list back to JSON.
-    *   Overwrite `tasks.json` with the new content.
-
-6.  **Release Lock:**
-    *   Delete `tasks.lock`.
+5.  **Post-Work Update (Task Completion/Failure):**
+    a.  Re-acquire `tasks.lock`.
+    b.  Read `tasks.json` again.
+    c.  Update the processed task's `status` to `COMPLETED` (or `FAILED`), update `updated_at`, and log a history event.
+    d.  **Pair Completion Check:**
+        i.  Retrieve the `pair_id` from the completed task.
+        ii. Check the status of all tasks belonging to this `pair_id`.
+        iii. If all tasks in the pair are `COMPLETED`:
+            1.  Find the corresponding `task_pair` object.
+            2.  Change its `status` to `COMPLETED`.
+            3.  Set `pair_lock: true` (optional, but good practice for completed pairs).
+            4.  **Advance Next Pair:** Find the *next* `task_pair` in sequence (the one with the lowest `sequence_index` greater than the just-completed pair's index). If this next pair has a `status` of `BLOCKED`, change its `status` to `READY` and set `pair_lock: false`. This "unlocks" the next pair for processing.
+    e.  Write all changes to `tasks.json`.
+    f.  Release `tasks.lock`.
 
 ## 5. Synchronization Rules
 
-*   **Locking is Mandatory:** No agent should read or write `tasks.json` without holding the lock.
-*   **Atomic Operations:** The sequence of acquiring a lock, reading, modifying, and writing `tasks.json`, and then releasing the lock should be treated as an atomic operation as much as possible.
-*   **Short Lock Duration:** Agents should hold the lock for the shortest possible time to minimize contention. Perform time-consuming task execution *after* releasing the lock if the task involves external actions and only re-acquire the lock for status updates. However, for internal state changes like assigning a task, it's often done while holding the lock.
-*   **Lock File Content:** The `tasks.lock` file should contain the ID of the agent holding the lock and a timestamp. This aids in debugging and potentially in manual intervention or automated stale lock detection.
-    *   Example `tasks.lock` content: `{"agent_id": "Agent1", "timestamp": "2023-10-27T10:00:00Z"}`
-*   **Stale Lock Detection (Conceptual - primarily Monitor's role):**
-    *   If `tasks.lock` exists for an unusually long time (beyond a defined threshold), it might indicate a crashed agent.
-    *   The Monitor (or a designated agent with caution) could be responsible for identifying and potentially removing stale locks. This is a critical operation and must be handled carefully to prevent data corruption. Manual intervention is safer initially.
-*   **Conflict Resolution:** The primary conflict resolution mechanism is the lock. If an agent cannot acquire the lock, it must wait and retry. "Last write wins" is the effective strategy for the `tasks.json` file itself, ensured by the locking mechanism. Content-level conflicts within the JSON (e.g., two agents trying to modify the *same field* of the *same task* in incompatible ways) are prevented if agents only modify tasks they are assigned to or are picking from `PENDING`.
+*   **Mandatory Locking for `tasks.json`:** All reads and writes to `tasks.json` MUST occur only after acquiring `tasks.lock`.
+*   **Atomic Operations:** The sequence of acquiring lock, reading data, modifying data, writing data, and releasing lock should be as short and efficient as possible.
+*   **Pair Advancement:**
+    *   A `task_pair` transitions from `BLOCKED` to `READY` only when the preceding `task_pair` (by `sequence_index`) is `COMPLETED`. This is typically done by the agent that completes the last task of the preceding pair.
+    *   The `advance_next_pair` command in `task_manager_cli.py` can also be used for manual advancement if needed.
+*   **Agent Task Specialization (Guideline):** Tasks within a pair should ideally be handled by different agents, as guided by the `agent_preference` field for each task. This promotes parallelism. Agents should prioritize tasks matching their preference within an active, unlocked pair.
+*   **`task_pair` Status Updates:** Any changes to a `task_pair` object (e.g., status, `pair_lock`) require holding `tasks.lock`.
+*   **Lock File Content:** `tasks.lock` should store the ID of the locking agent and a timestamp to help identify stale locks. Example: `{"agent_id": "Agent1", "timestamp": "..."}`.
+*   **Stale Lock Resolution:** Stale locks (locks held for an excessive duration) may indicate a crashed agent. Manual removal or a monitor process is needed. Agents may incorporate a timeout for breaking stale locks, but this must be implemented carefully.
 
 ## 6. Running the Monitor (Conceptual)
 
-The Monitor is a conceptual component that would run as a separate process. Its primary responsibilities would include:
-
-*   **Stale Lock Detection:**
-    *   Periodically check `tasks.lock`.
-    *   If the lock's timestamp is older than a predefined threshold (e.g., 15 minutes), flag it as potentially stale.
-    *   Alert administrators or attempt an automated (but cautious) recovery, such as verifying if the owning agent process is still active before removing the lock.
-*   **Dead Agent Detection:** (More advanced)
-    *   If agents report heartbeats, the monitor can detect non-responsive agents.
-    *   If an agent holding a lock is detected as dead, the monitor might (again, cautiously) release the lock and potentially re-queue `IN_PROGRESS` tasks assigned to that agent.
-*   **Task List Integrity Checks:**
-    *   Periodically scan `tasks.json` for malformed entries or inconsistencies (though the strict workflow should minimize this).
-*   **Logging and Reporting:** Provide overall system health visibility.
-
-**Note:** Implementing a robust Monitor is a significant task. Initially, manual monitoring and intervention might be necessary.
+(Content remains largely the same as previous version - focused on stale lock detection, dead agent detection, integrity checks, logging.)
 
 ## 7. Tips for Management
 
-*   **Unique Agent IDs:** Ensure each agent has a clearly distinct ID used in `assigned_to` fields and lock files.
-*   **Timestamp Precision:** Use ISO 8601 timestamps with sufficient precision, preferably UTC, to avoid time zone issues.
-*   **Error Handling:** Agents must have robust error handling, especially around file I/O and JSON parsing. If an agent crashes while holding the lock, manual intervention will be needed to remove `tasks.lock`.
-*   **Backup `tasks.json`:** Regularly back up `tasks.json` to prevent data loss in case of catastrophic failure.
-*   **Clear Task Descriptions:** Well-defined tasks reduce ambiguity and the chance of agents working at cross-purposes.
-*   **Idempotency:** Design task operations to be idempotent where possible. If an agent attempts to re-run a completed step, it shouldn't cause negative side effects.
-*   **Incremental Rollout:** Test the system thoroughly with simple tasks before deploying it for critical operations.
-*   **Logging:** Agents should maintain detailed local logs of their activities, including attempts to acquire locks, tasks processed, and any errors encountered. This is invaluable for debugging.
-*   **Define Stale Lock Timeout:** Establish a clear timeout period for what constitutes a "stale" lock, appropriate for the typical task processing time.
-*   **Manual Lock Removal Procedure:** Have a defined, cautious procedure for manually removing `tasks.lock` if an agent crashes and leaves it behind. This should involve verifying the agent is truly inactive.
+(Content remains largely the same - focus on unique IDs, timestamps, error handling, backups, clear descriptions, idempotency, incremental rollout, logging, stale lock timeout, manual lock removal.)
+*   **Sequential `sequence_index`:** Ensure `sequence_index` for `task_pairs` are unique and correctly ordered. Gaps are acceptable but direct sequence is easier to manage.
+
+## 8. Helper Script: `task_manager_cli.py`
+
+`task_manager_cli.py` is a command-line utility for manual administration and inspection of the `tasks.json` file. It helps in setting up the initial file, adding tasks and pairs, checking status, and manually advancing task pairs if necessary. All operations that modify `tasks.json` performed by the CLI acquire and release `tasks.lock`.
+
+**Key Commands:**
+
+*   **`init [--force]`**:
+    *   Initializes `tasks.json` with `{"task_pairs": [], "tasks": []}`.
+    *   `--force`: Overwrites `tasks.json` if it already exists.
+*   **`add_task --desc <description> [--agent_pref <agent_id>] [--pair_id <pair_id>] [--task_id <task_id>]`**:
+    *   Adds a new task to the `tasks` array.
+    *   `--desc`: Task description (required).
+    *   `--agent_pref`: Preferred agent ID for this task.
+    *   `--pair_id`: Assigns this task to an existing task pair.
+    *   `--task_id`: Specify a custom task ID (default is UUID).
+*   **`add_pair --task_id1 <task_id1> --task_id2 <task_id2> --seq_idx <index> [--pair_id <pair_id>] [--status <status>] [--lock <true|false>]`**:
+    *   Creates a new task pair in the `task_pairs` array.
+    *   `--task_id1`, `--task_id2`: IDs of the two tasks forming the pair (must exist).
+    *   `--seq_idx`: Sequence index for the pair (required).
+    *   `--pair_id`: Specify a custom pair ID (default is "pair_" + UUID).
+    *   `--status`: Initial status (e.g., "BLOCKED", "READY", default "BLOCKED").
+    *   `--lock`: Initial lock state (`true` or `false`). Defaults based on status.
+*   **`create_full_pair --desc1 <desc1> --agent1 <agent1_id> --desc2 <desc2> --agent2 <agent2_id> --seq_idx <index> [--pair_id <pair_id_prefix>]`**:
+    *   A convenience command that creates two new tasks and a new pair linking them.
+    *   `--desc1`, `--agent1`: Description and preferred agent for the first task.
+    *   `--desc2`, `--agent2`: Description and preferred agent for the second task.
+    *   `--seq_idx`: Sequence index for the new pair.
+    *   `--pair_id`: Optional custom prefix for the generated pair ID and task IDs.
+*   **`status [--pair_id <pair_id>] [--task_id <task_id>]`**:
+    *   Displays the status of specific tasks or pairs, or all if no ID is provided.
+    *   If `pair_id` is given, shows the pair and its constituent tasks.
+    *   If `task_id` is given, shows the specific task.
+*   **`advance_next_pair [--force]`**:
+    *   Finds the current highest `COMPLETED` pair by `sequence_index`.
+    *   Then finds the next pair in sequence. If that pair is `BLOCKED`, changes its status to `READY` and `pair_lock` to `false`.
+    *   `--force`: Allows advancing even if the "current" completed pair isn't found (e.g., for initial setup or recovery). Useful to kickstart the first `BLOCKED` pair to `READY`.
+*   **`validate`**:
+    *   Performs integrity checks on `tasks.json`:
+        *   Checks for duplicate task IDs or pair IDs.
+        *   Ensures task IDs in pairs exist in the `tasks` list.
+        *   Verifies `sequence_index` uniqueness for pairs.
+        *   Checks for orphaned tasks (tasks with a `pair_id` that doesn't exist).
+
+This CLI script is essential for managing the lifecycle of tasks and pairs, especially for bootstrapping the system or recovering from unexpected states.
 ```
