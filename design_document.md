@@ -172,7 +172,35 @@ Supported types: `text`, `number`, `boolean`, `stream`, `audio`, `image`, `json`
 5. **Module Loading & Versioning:** Semantic versioning + hot‑reload support.
 6. **Security:** Sandbox backend modules; validate manifests.
 
-## 10. Future Extensions
+## 11. Risk Mitigation
+
+### 11.1. Plugin System (Phase 6)
+**Risk:** External code injection, unstable behavior, versioning conflicts.
+**Mitigation:**
+- Gate plugin system behind a developer-only flag.
+- Implement runtime sandboxing for backend modules.
+- Add a dry-run validator that simulates component registration without executing logic.
+- Use semantic versioning and strict manifest validation before load.
+
+### 11.2. WebSocket Stream Saturation
+**Risk:** Excessive streaming (LLMs, media) may overload the event bus or cause UI lag.
+**Mitigation:**
+- Implement throttle and debounce middleware for output-heavy nodes.
+- Add optional `rateLimit` property in manifest.json for stream-type outputs.
+- Simulate high-frequency output in dev mode using mock nodes to stress test.
+- Consider Web Worker delegation for large stream data (audio/image).
+
+### 11.3. State Persistence Edge Cases
+**Risk:** Corrupted or half-wired canvas state; undefined nodes or orphaned connections.
+**Mitigation:**
+- Create a schema validator for saved `.canvas.json` files.
+- On load, highlight invalid or missing components in a safe "quarantine" zone on canvas.
+- Offer diff preview for load mismatches (what’s missing, what changed).
+- Save with metadata checksum or file format version tagging to enable backward compatibility.
+
+*Layering these safeguards ensures stability as your system matures.*
+
+## 12. Future Extensions
 
 * **Parameter Modulation:** LFO-style auto-modulators and envelopes.
 * **Groups & Macros:** Bundled sub‑circuits as higher‑order components.
