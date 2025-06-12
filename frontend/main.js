@@ -92,24 +92,47 @@ if (sidebarDiv) {
     if (withinXBounds && withinYBounds) {
       console.log(`Drop position (main stage relative): X=${pointerPosition.x}, Y=${pointerPosition.y} - Within bounds.`);
 
-      // Create a new rectangle (a "clone" of the dummy component) on the main stage
-      var newRect = new Konva.Rect({
-        // Adjust x and y to center the new rectangle on the pointer position
+      // Create a Konva.Group for the component (rectangle + label)
+      var componentGroup = new Konva.Group({
         x: pointerPosition.x - dummyComponent.width() / 2,
         y: pointerPosition.y - dummyComponent.height() / 2,
-        width: dummyComponent.width(),
-        height: dummyComponent.height(),
-        fill: 'red', // Different color to distinguish from the sidebar component
-        stroke: 'black',
-        strokeWidth: 2,
-        draggable: true // Make this new component on the main stage draggable as well
+        draggable: true
       });
 
-      // Add the new rectangle to the main layer
-      mainLayer.add(newRect);
-      // Redraw the main layer to display the new component
+      // Create the rectangle for the component (relative to the group)
+      var newRect = new Konva.Rect({
+        x: 0, // Position relative to the group
+        y: 0, // Position relative to the group
+        width: dummyComponent.width(),
+        height: dummyComponent.height(),
+        fill: 'red',
+        stroke: 'black',
+        strokeWidth: 2
+        // draggable: false, // Not needed as group is draggable
+      });
+
+      // Create the label for the component (relative to the group)
+      var label = new Konva.Text({
+        x: 0, // Position relative to the group
+        y: 0, // Position relative to the group
+        text: 'Dummy Component',
+        fontSize: 12,
+        fontFamily: 'Arial',
+        fill: 'black',
+        width: dummyComponent.width(), // Match rectangle width for centering
+        height: dummyComponent.height(), // Match rectangle height for centering
+        align: 'center',
+        verticalAlign: 'middle'
+      });
+
+      // Add rectangle and label to the group
+      componentGroup.add(newRect);
+      componentGroup.add(label);
+
+      // Add the group to the main layer
+      mainLayer.add(componentGroup);
       mainLayer.draw();
-      console.log("New component created on main stage and main layer redrawn.");
+      console.log("New component group (rect + label) created on main stage and main layer redrawn.");
     } else {
       console.log(`Drop position (main stage relative): X=${pointerPosition.x}, Y=${pointerPosition.y} - Outside main stage bounds.`);
     }
