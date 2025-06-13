@@ -138,7 +138,6 @@ const AIChatInterface = () => {
       );
 
       const result = await Promise.race([responsePromise, timeoutPromise]);
-
       console.log('JSON-RPC response result:', result);
       if (result && result.responseText !== undefined) {
         setResponseText(result.responseText);
@@ -147,6 +146,7 @@ const AIChatInterface = () => {
         console.warn('Response received, but `responseText` field is missing:', result);
         setError('Received a response, but it was not in the expected format.');
       }
+      
     } catch (rpcError) {
       console.error('JSON-RPC Error or Timeout:', rpcError);
       setError(rpcError.message || 'An error occurred while processing your request.');
