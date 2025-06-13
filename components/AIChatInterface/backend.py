@@ -3,7 +3,39 @@ import time # To simulate streaming
 class AIChatInterfaceBackend:
     def __init__(self):
         # In a real scenario, this might load a model or set up connections.
-        pass
+        self.config = {}
+
+    def create(self, config: dict):
+        """
+        Stores the configuration for the AIChatInterface.
+        """
+        self.config = config
+        # In a real backend, you might use this config to initialize things
+        print(f"AIChatInterfaceBackend created with config: {self.config}")
+        return {"status": "success", "message": "Configuration received."}
+
+    def update(self, inputs: dict):
+        """
+        Processes user input and returns a response.
+        """
+        if 'userInput' in inputs:
+            user_input = inputs['userInput']
+            # Get temperature and max_tokens from inputs, with defaults from process_request's signature
+            # However, since process_request has defaults, we can just pass them if they exist,
+            # or let process_request handle the defaults if they don't.
+            temperature = inputs.get('temperature', 0.7)
+            max_tokens = inputs.get('max_tokens', 256)
+
+            # Potentially use self.config here if needed for process_request
+            # For example: self.process_request(user_input, self.config.get('temperature', 0.7), ...)
+            # But for now, let's stick to the prompt's direct instructions.
+            return self.process_request(user_input, temperature, max_tokens)
+        else:
+            return {
+                "responseText": "No input provided.",
+                "responseStream": "",
+                "error": False
+            }
 
     def process_request(self, user_input: str, temperature: float = 0.7, max_tokens: int = 256):
         """
