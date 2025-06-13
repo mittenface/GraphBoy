@@ -235,9 +235,153 @@ async def main():
     print("Application startup complete. Servers are starting...")
 
     http_server_thread.start()
+    print("HTTP server thread started.")
 
-    # Keep the main thread alive to run the asyncio event loop for the WebSocket server
-    await websocket_server_task # This starts the WebSocket server and keeps main running
+    # Return references for management (e.g., in tests or a more complex app structure)
+    return httpd, http_server_thread, websocket_server_instance
+
+async def stop_servers(httpd, http_server_thread, ws_server_instance):
+    print("Stopping WebSocket server...")
+    if ws_server_instance:
+        ws_server_instance.close()
+        await ws_server_instance.wait_closed()
+        print("WebSocket server stopped.")
+
+    print("Stopping HTTP server...")
+    if httpd:
+        # httpd.shutdown() needs to be called from a different thread than serve_forever()
+        # Since http_server_thread is a daemon, it will exit when the main program exits
+        # For explicit shutdown, one might need to signal the thread or use a different server type
+        # For now, relying on daemon thread property for tests.
+        # A more robust shutdown would involve httpd.shutdown() called from another thread.
+        # Or, if the loop is stopped, the daemon thread will also stop.
+        httpd.server_close() # Closes the server socket
+    if http_server_thread and http_server_thread.is_alive():
+        # http_server_thread.join(timeout=1.0) # Wait for thread to finish
+        print("HTTP server thread is a daemon, should stop with main loop.")
+    print("Servers stopping sequence initiated.")
+
+
+async def main_server_loop(httpd_server_ref, ws_server_ref):
+    """Keeps the servers running. httpd runs in its own thread."""
+    # The httpd server runs in a daemon thread, so it doesn't need explicit await here
+    # We await the WebSocket server task to keep the asyncio loop alive for it.
+    if ws_server_ref:
+        await ws_server_ref
+    else:
+        # If there's no WebSocket server, we might need another way to keep loop alive
+        # or this function might complete immediately if httpd is only daemon.
+        # For now, assume ws_server_ref is always there.
+        print("WebSocket server not started, main loop might exit if HTTP is daemon only.")
+
+
+async def setup_and_start_servers():
+    # Ensure server.py can find the components directory
+    import sys
+    import os
+    project_root = os.path.abspath(os.path.dirname(__file__))
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+
+    # Initialize the backend
+    backend_instance = None
+    global AIChatInterfaceBackend
+    if AIChatInterfaceBackend is None:
+        try:
+            from components.AIChatInterface.backend import AIChatInterfaceBackend as BackendFromComponents
+            AIChatInterfaceBackend = BackendFromComponents
+            print("AIChatInterfaceBackend re-loaded successfully in setup_and_start_servers().")
+        except ImportError:
+            print("Warning: AIChatInterfaceBackend could not be imported in setup_and_start_servers().")
+
+    if AIChatInterfaceBackend:
+        backend_instance = AIChatInterfaceBackend()
+        print("AIChatInterfaceBackend initialized.")
+    else:
+        print("CRITICAL ERROR: AIChatInterfaceBackend is None. Chat functionalities will not work.")
+
+    CustomHandler.chat_backend = backend_instance
+
+    # Configure HTTP server
+    httpd = socketserver.TCPServer(("0.0.0.0", PORT), CustomHandler, bind_and_activate=False)
+    # Set allow_reuse_address to True to prevent "Address already in use" errors during tests or rapid restarts
+    httpd.allow_reuse_address = True
+    httpd.server_bind()
+    httpd.server_activate()
+
+    http_server_thread = threading.Thread(target=httpd.serve_forever, name="HTTPThread")
+    http_server_thread.daemon = True
+
+    http_server_thread.daemon = True
+
+    # Configure WebSocket server
+    bound_websocket_handler = lambda ws, path: websocket_handler(ws, path, backend_instance)
+
+    # The actual websockets.Server object is returned by websockets.serve()
+    # This object can be used to close the server.
+    ws_server_object = await websockets.serve(
+        bound_websocket_handler, # Original handler
+        "0.0.0.0",
+        WS_PORT
+    )
+
+    print(f"HTTP Server configured for http://0.0.0.0:{PORT}")
+    if backend_instance:
+        print("AI Chat Interface backend is configured for HTTP.")
+    else:
+        print("Warning: AI Chat Interface backend FAILED to load for HTTP.")
+
+    print(f"WebSocket Server configured for ws://0.0.0.0:{WS_PORT}")
+    if backend_instance:
+        print("AI Chat Interface backend is configured for WebSocket.")
+    else:
+        print("Warning: AI Chat Interface backend FAILED to load for WebSocket.")
+
+    http_server_thread.start()
+    print("HTTP server thread started.")
+    print("Servers setup complete. WebSocket server is running via its task.")
+
+    # ws_server_object is the websockets.Server instance that we need to await or manage
+    # In the original main, it was `await websocket_server_task`
+    # For testability, we return the server objects.
+    return httpd, http_server_thread, ws_server_object
+
+
+async def main():
+    httpd, http_server_thread, ws_server_instance = await setup_and_start_servers()
+
+    # In the main application, we want the servers to run indefinitely.
+    # The HTTP server is in a daemon thread. The WebSocket server runs in the asyncio loop.
+    # Awaiting the ws_server_instance's task (which is what websockets.serve effectively does)
+    # or using something like asyncio.Event().wait() can keep the main coroutine alive.
+    try:
+        # If ws_server_instance is the result of websockets.serve, it's a Server instance.
+        # It doesn't need to be awaited directly here to keep it running if it's managed by the loop.
+        # Instead, we might want a way to signal shutdown. For simplicity, gather it.
+        # await asyncio.gather(ws_server_instance.serve_forever()) # This is one way if serve_forever() exists
+        # However, websockets.serve already starts the server task.
+        # We just need to keep the main task from exiting.
+        if ws_server_instance:
+             # The server runs until ws_server_instance.close() is called.
+             # To keep main alive, we can wait for a shutdown signal or just loop.
+             # For now, this simple await on wait_closed will effectively mean it runs until closed elsewhere.
+             # This might not be ideal for the actual main() if nothing calls close().
+             # A better approach for main() is often an asyncio.Event:
+             shutdown_event = asyncio.Event()
+             print("Servers running. Waiting for shutdown signal...")
+             await shutdown_event.wait() # This will wait indefinitely until event.set()
+        else:
+            print("WebSocket server failed to start. Exiting.")
+
+    except KeyboardInterrupt:
+        print("KeyboardInterrupt received, shutting down...")
+    finally:
+        print("Main loop ending, initiating server shutdown...")
+        await stop_servers(httpd, http_server_thread, ws_server_instance)
+
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("Application shutdown.")
