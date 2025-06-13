@@ -1,13 +1,15 @@
 import os
 import json
+import importlib
 from pathlib import Path
-from typing import Dict # Import Dict for type hinting
+from typing import Dict, Any # Import Dict and Any for type hinting
 
 from shared_types.component_manifest import ComponentManifest
 
 class ComponentRegistry:
     def __init__(self) -> None:
         self.manifests: Dict[str, ComponentManifest] = {}
+        self.instances: Dict[str, Any] = {}
 
     def discover_components(self, components_dir_path: str | Path) -> None:
         if not isinstance(components_dir_path, Path):
@@ -38,6 +40,24 @@ class ComponentRegistry:
                             )
                             self.manifests[component_name] = manifest
                             # print(f"Successfully loaded manifest for component: {component_name}")
+
+                            # Dynamically load and instantiate component backend
+                            try:
+                                module_name = f"components.{item.name}.backend"
+                                class_name = f"{item.name}Backend"
+
+                                module = importlib.import_module(module_name)
+                                component_class = getattr(module, class_name)
+
+                                self.instances[component_name] = component_class()
+                                # print(f"Successfully instantiated backend for component: {component_name}")
+                            except ImportError:
+                                print(f"Error: Could not import backend module {module_name} for component {component_name}")
+                            except AttributeError:
+                                print(f"Error: Could not find class {class_name} in module {module_name} for component {component_name}")
+                            except Exception as e:
+                                print(f"Error: Could not instantiate backend for component {component_name}: {e}")
+
                         except KeyError as e:
                             print(f"Error: Missing key {e} in manifest {manifest_path}")
                         except Exception as e: # Catch other errors during TypedDict creation
@@ -66,3 +86,15 @@ class ComponentRegistry:
             The ComponentManifest if found, otherwise None.
         """
         return self.manifests.get(component_name)
+
+    def get_component_instance(self, component_name: str) -> Any | None:
+        """
+        Retrieves the backend instance for a given component name.
+
+        Args:
+            component_name: The name of the component.
+
+        Returns:
+            The component instance if found, otherwise None.
+        """
+        return self.instances.get(component_name)
