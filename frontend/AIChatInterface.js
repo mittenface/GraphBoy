@@ -2,21 +2,56 @@ const AIChatInterface = () => {
   const [userInput, setUserInput] = React.useState('');
   const [temperature, setTemperature] = React.useState(0.5);
   const [maxTokens, setMaxTokens] = React.useState(256);
+  const [responseText, setResponseText] = React.useState('');
+  const [isLoading, setIsLoading] = React.useState(false);
+  const [error, setError] = React.useState(null);
 
-  const handleSubmit = (event) => {
+  const handleSubmit = async (event) => {
     event.preventDefault();
-    console.log({
-      userInput,
-      temperature,
-      maxTokens,
-    });
+    setIsLoading(true);
+    setError(null);
+    setResponseText(''); // Clear previous response
+
+    try {
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          userInput,
+          temperature,
+          maxTokens,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      console.log('Success:', data);
+      if (data.responseText) {
+        setResponseText(data.responseText);
+      } else {
+        setError('No responseText found in the response.');
+      }
+    } catch (error) {
+      console.error('Error:', error);
+      setError(error.message || 'An unexpected error occurred.');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return React.createElement(
-    'form',
-    { onSubmit: handleSubmit },
+    React.Fragment,
+    null,
     React.createElement(
-      'div',
+      'form',
+      { onSubmit: handleSubmit },
+      React.createElement(
+        'div',
       null,
       React.createElement(
         'label',
@@ -65,10 +100,22 @@ const AIChatInterface = () => {
         step: '50',
       })
     ),
-    React.createElement(
-      'button',
-      { type: 'submit' },
-      'Submit'
+      React.createElement(
+        'button',
+        { type: 'submit', disabled: isLoading },
+        isLoading ? 'Loading...' : 'Submit'
+      )
+    ),
+    error && React.createElement(
+      'div',
+      { style: { color: 'red', marginTop: '10px' } },
+      `Error: ${error}`
+    ),
+    responseText && React.createElement(
+      'div',
+      { style: { marginTop: '20px', padding: '10px', border: '1px solid #ccc', whiteSpace: 'pre-wrap' } },
+      React.createElement('h3', null, 'AI Response:'),
+      responseText
     )
   );
 };
