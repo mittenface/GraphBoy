@@ -1,174 +1,83 @@
 import unittest
-from unittest.mock import patch
 import sys
-import os
 from pathlib import Path
 
 # Add the project root to sys.path to allow imports like 'components.AIChatInterface'
-# This assumes the tests might be run from different directories or with tools that don't automatically handle it.
-project_root = Path(__file__).resolve().parent.parent.parent.parent # This should point to the project root
+project_root = Path(__file__).resolve().parent.parent.parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-try:
-    from components.AIChatInterface.backend import AIChatInterfaceBackend
-    # Or, if you prefer using the __init__.py export:
-    # from components.AIChatInterface import AIChatInterfaceBackend
-except ImportError:
-    print("Error: Could not import AIChatInterfaceBackend for testing. Check PYTHONPATH and project structure.")
-    # Define a dummy class if import fails, so tests can at least be defined, though they will likely fail.
-    class AIChatInterfaceBackend:
-        def process_request(self, *args, **kwargs):
-            raise ImportError("AIChatInterfaceBackend not available")
+from components.AIChatInterface.backend import AIChatInterfaceBackend
 
 class TestAIChatInterfaceBackend(unittest.TestCase):
-
     def setUp(self):
-        """Set up for each test method."""
-        try:
-            self.backend = AIChatInterfaceBackend()
-        except ImportError:
-            self.backend = None # Tests requiring self.backend will skip or fail
+        self.backend = AIChatInterfaceBackend()
+        # self.backend.create({}) # No specific config needed for these tests
 
     def test_backend_instantiation(self):
         """Test if the backend can be instantiated."""
-        if self.backend is None:
-            self.skipTest("AIChatInterfaceBackend could not be imported.")
         self.assertIsNotNone(self.backend, "Backend should be instantiable")
-
-    def test_process_request_basic(self):
-        """Test the basic processing of a request."""
-        if self.backend is None:
-            self.skipTest("AIChatInterfaceBackend could not be imported.")
-
-        user_input = "Hello Test"
-        expected_response_text_part = f"Processed: '{user_input}'"
-        expected_stream_part = f"Stream chunk 1 for '{user_input}'"
-
-        result = self.backend.process_request(user_input=user_input)
-
-        self.assertFalse(result["error"], "Error flag should be False for successful request")
-        self.assertIn(expected_response_text_part, result["responseText"], "Response text does not match expected output")
-        self.assertIn(expected_stream_part, result["responseStream"], "Response stream does not match expected output")
-
-        # Check structure matches manifest (simplified)
-        self.assertIn("responseText", result)
-        self.assertIn("responseStream", result)
-        self.assertIn("error", result)
-
-    def test_process_request_with_params(self):
-        """Test processing with temperature and max_tokens parameters."""
-        if self.backend is None:
-            self.skipTest("AIChatInterfaceBackend could not be imported.")
-
-        user_input = "Params Test"
-        temperature = 0.5
-        max_tokens = 100
-
-        expected_response_text_part = f"(temp={temperature}, tokens={max_tokens})"
-
-        result = self.backend.process_request(
-            user_input=user_input,
-            temperature=temperature,
-            max_tokens=max_tokens
-        )
-
-        self.assertFalse(result["error"])
-        self.assertIn(expected_response_text_part, result["responseText"], "Response text does not reflect custom parameters")
-
-    def test_response_structure(self):
-        """Ensure the response structure includes all defined output nodes."""
-        if self.backend is None:
-            self.skipTest("AIChatInterfaceBackend could not be imported.")
-
-        user_input = "Structure Test"
-        result = self.backend.process_request(user_input=user_input)
-
-        # As per manifest.json for AIChatInterface
-        # outputs: [{"name": "responseText", "type": "text"}, {"name": "responseStream", "type": "stream"}, {"name": "error", "type": "boolean"}]
-        self.assertIn("responseText", result, "Response should contain 'responseText'")
-        self.assertTrue(isinstance(result["responseText"], str), "'responseText' should be a string")
-
-        self.assertIn("responseStream", result, "Response should contain 'responseStream'")
-        self.assertTrue(isinstance(result["responseStream"], str), "'responseStream' should be a string (as per current backend implementation)")
-
-        self.assertIn("error", result, "Response should contain 'error'")
-        self.assertTrue(isinstance(result["error"], bool), "'error' should be a boolean")
-
-    # --- Tests for create and update methods ---
 
     def test_create_stores_config(self):
         """Test if the create method stores configuration."""
-        if self.backend is None:
-            self.skipTest("AIChatInterfaceBackend could not be imported.")
-
-        sample_config = {"model": "gpt-4", "mode": "chat"}
-        # Assuming create returns a status, as implemented in the previous step
+        sample_config = {"model": "test-model", "setting": "test-setting"}
         response = self.backend.create(config=sample_config)
-
         self.assertEqual(self.backend.config, sample_config, "Config should be stored in self.backend.config")
-        self.assertIn("status", response, "Response from create should include a status")
-        self.assertEqual(response["status"], "success", "Status of create should be 'success'")
+        self.assertIn("status", response)
+        self.assertEqual(response["status"], "success")
 
-    def test_update_with_user_input(self):
-        """Test update method with user input and custom parameters."""
-        if self.backend is None:
-            self.skipTest("AIChatInterfaceBackend could not be imported.")
+    def test_update_with_mock_llm_defaults(self):
+        """Test update method with mock LLM and default parameters."""
+        user_input = "Hello with defaults"
+        # Defaults from process_request signature are temp=0.7, max_tokens=256
+        # These are passed by update() to process_request(), then to mock_llm_api()
+        expected_response_text = f"Mock LLM response to '{user_input}' (temp=0.7, tokens=256)"
+        expected_response_stream = f"Mock LLM stream for '{user_input}' chunk 1\nMock LLM stream for '{user_input}' chunk 2\n"
 
-        inputs = {"userInput": "Hello AI", "temperature": 0.5, "max_tokens": 100}
-        expected_response_text_part = "Processed: 'Hello AI' (temp=0.5, tokens=100)"
+        response = self.backend.update({"userInput": user_input})
 
-        result = self.backend.update(inputs=inputs)
+        self.assertFalse(response["error"])
+        self.assertEqual(response["responseText"], expected_response_text)
+        self.assertEqual(response["responseStream"], expected_response_stream)
 
-        self.assertFalse(result["error"], "Error flag should be False for successful update")
-        self.assertIn(expected_response_text_part, result["responseText"], "Response text does not match expected output")
+    def test_update_with_mock_llm_custom_params(self):
+        """Test update method with mock LLM and custom parameters."""
+        user_input = "Hello with custom params"
+        temp = 0.5
+        tokens = 100
+        expected_response_text = f"Mock LLM response to '{user_input}' (temp={temp}, tokens={tokens})"
+        expected_response_stream = f"Mock LLM stream for '{user_input}' chunk 1\nMock LLM stream for '{user_input}' chunk 2\n"
 
-    def test_update_with_user_input_default_params(self):
-        """Test update method with user input and default temperature/max_tokens."""
-        if self.backend is None:
-            self.skipTest("AIChatInterfaceBackend could not be imported.")
+        response = self.backend.update({
+            "userInput": user_input,
+            "temperature": temp,
+            "max_tokens": tokens
+        })
 
-        inputs = {"userInput": "Just testing"}
-        # Defaults are temperature=0.7, max_tokens=256 as per process_request
-        expected_response_text_part = "Processed: 'Just testing' (temp=0.7, tokens=256)"
+        self.assertFalse(response["error"])
+        self.assertEqual(response["responseText"], expected_response_text)
+        self.assertEqual(response["responseStream"], expected_response_stream)
 
-        result = self.backend.update(inputs=inputs)
-
-        self.assertFalse(result["error"], "Error flag should be False")
-        self.assertIn(expected_response_text_part, result["responseText"], "Response text does not reflect default parameters")
-
-    def test_update_without_user_input(self):
+    def test_update_no_input(self):
         """Test update method when no userInput is provided."""
-        if self.backend is None:
-            self.skipTest("AIChatInterfaceBackend could not be imported.")
+        response = self.backend.update({})
+        self.assertFalse(response["error"]) # As per current update logic for no input
+        self.assertEqual(response["responseText"], "No input provided.")
+        self.assertEqual(response["responseStream"], "")
 
-        inputs = {"some_other_param": "value"}
-        expected_response = {
-            "responseText": "No input provided.",
-            "responseStream": "",
-            "error": False
-        }
+    def test_response_structure_after_update(self):
+        """Ensure the response structure from update matches manifest output nodes."""
+        user_input = "Structure Test via Update"
+        response = self.backend.update({"userInput": user_input})
 
-        result = self.backend.update(inputs=inputs)
-        self.assertEqual(result, expected_response, "Response should be the default when no userInput is provided")
+        self.assertIn("responseText", response)
+        self.assertTrue(isinstance(response["responseText"], str))
 
-    @patch.object(AIChatInterfaceBackend, 'process_request')
-    def test_update_passes_all_params_to_process_request(self, mock_process_request):
-        """Test that update correctly calls process_request with all parameters."""
-        if self.backend is None:
-            self.skipTest("AIChatInterfaceBackend could not be imported.")
+        self.assertIn("responseStream", response)
+        self.assertTrue(isinstance(response["responseStream"], str))
 
-        # Configure the mock to return a specific structure to prevent TypeErrors if update tries to access keys
-        mock_process_request.return_value = {"responseText": "", "responseStream": "", "error": False}
-
-        inputs = {"userInput": "Test", "temperature": 0.1, "max_tokens": 50}
-        self.backend.update(inputs=inputs)
-
-        mock_process_request.assert_called_once_with("Test", 0.1, 50)
+        self.assertIn("error", response)
+        self.assertTrue(isinstance(response["error"], bool))
 
 if __name__ == '__main__':
-    # This allows running the tests directly from this file
-    print(f"Running tests from: {Path(__file__).resolve()}")
-    print(f"Project root for test: {project_root}")
-    print(f"sys.path for test: {sys.path}")
-    unittest.main(argv=['first-arg-is-ignored'], exit=False)
+    unittest.main()

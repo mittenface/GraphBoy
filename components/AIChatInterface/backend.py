@@ -1,9 +1,18 @@
-import time # To simulate streaming
-
 class AIChatInterfaceBackend:
     def __init__(self):
         # In a real scenario, this might load a model or set up connections.
         self.config = {}
+
+    @staticmethod
+    def mock_llm_api(user_input: str, temperature: float, max_tokens: int):
+        """
+        Mock LLM API function.
+        """
+        return {
+            "responseText": f"Mock LLM response to '{user_input}' (temp={temperature}, tokens={max_tokens})",
+            "responseStream": f"Mock LLM stream for '{user_input}' chunk 1\nMock LLM stream for '{user_input}' chunk 2\n",
+            "error": False,
+        }
 
     def create(self, config: dict):
         """
@@ -51,31 +60,8 @@ class AIChatInterfaceBackend:
         """
         print(f"Received request: userInput='{user_input}', temperature={temperature}, max_tokens={max_tokens}")
 
-        # Simulate some processing delay
-        time.sleep(0.5)
-
-        # Placeholder logic: Echo the input with some modification
-        response_text = f"Processed: '{user_input}' (temp={temperature}, tokens={max_tokens})"
-
-        # Simulate a streaming response
-        # In a real application, this would be more complex, yielding parts of the response.
-        response_stream_data = []
-        for i in range(3):
-            time.sleep(0.2) # Simulate delay between stream chunks
-            chunk = f"Stream chunk {i+1} for '{user_input}'\n"
-            response_stream_data.append(chunk)
-
-        # For now, we'll just concatenate the stream chunks into the main response_text
-        # or return them separately if the frontend/server can handle actual streaming.
-        # Let's assume for now the 'responseStream' output in manifest.json means
-        # we should provide the full "streamed" content at once.
-        full_stream_content = "".join(response_stream_data)
-
-        return {
-            "responseText": response_text,
-            "responseStream": full_stream_content, # Or response_stream_data if handled differently
-            "error": False
-        }
+        # Call the mock LLM API
+        return AIChatInterfaceBackend.mock_llm_api(user_input, temperature, max_tokens)
 
 if __name__ == '__main__':
     # Example Usage (for testing purposes)
