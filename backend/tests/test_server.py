@@ -373,3 +373,116 @@ if AIChatInterfaceBackend is None:
 # It's good practice to also ensure that the server cleans up ports correctly.
 # Pytest with allow_reuse_address helps, but checking for listen_on after server stop can be useful.
 # However, that's more involved and platform-dependent.
+
+
+@pytest.mark.asyncio
+async def test_component_update_input_success(test_server):
+    uri = f"ws://localhost:{WS_PORT}"
+    request_id = "comp-success-1"
+    component_name = "AIChatInterface" # Assuming this component exists and is discoverable
+    user_input = "Hello component!"
+
+    request = {
+        "jsonrpc": "2.0",
+        "method": "component.updateInput",
+        "params": {
+            "componentName": component_name,
+            "inputs": {"userInput": user_input, "temperature": 0.6, "maxTokens": 60}
+        },
+        "id": request_id
+    }
+
+    if AIChatInterfaceBackend is None:
+        pytest.skip("AIChatInterfaceBackend is not available, skipping component.updateInput success test.")
+
+    try:
+        response = await send_json_rpc_request(uri, request)
+        assert response.get("jsonrpc") == "2.0"
+        assert response.get("id") == request_id
+        assert "result" in response, f"Response missing 'result'. Error: {response.get('error')}"
+
+        result = response["result"]
+        assert "responseText" in result
+        assert isinstance(result["responseText"], str)
+        # Assuming the mock backend or actual backend would include these if process_request is called
+        assert "responseStream" in result # Based on AIChatInterfaceBackend.process_request structure
+        assert "error" in result and result["error"] is False # Based on AIChatInterfaceBackend.process_request structure
+
+        print(f"Component update success response: {result['responseText']}")
+
+    except ConnectionRefusedError:
+        pytest.fail(f"Connection to {uri} was refused.")
+    except Exception as e:
+        pytest.fail(f"test_component_update_input_success failed: {e}")
+
+
+@pytest.mark.asyncio
+async def test_component_update_input_not_found(test_server):
+    uri = f"ws://localhost:{WS_PORT}"
+    request_id = "comp-nf-1"
+    component_name = "NonExistentComponent123"
+
+    request = {
+        "jsonrpc": "2.0",
+        "method": "component.updateInput",
+        "params": {
+            "componentName": component_name,
+            "inputs": {"someInput": "doesn't matter"}
+        },
+        "id": request_id
+    }
+
+    try:
+        response = await send_json_rpc_request(uri, request)
+        assert response.get("jsonrpc") == "2.0"
+        assert response.get("id") == request_id
+        assert "error" in response, "Response missing 'error' field for non-existent component."
+
+        error_details = response["error"]
+        assert error_details.get("code") == -32001
+        assert f"Component '{component_name}' not found" in error_details.get("message", "")
+
+        print(f"Component not found response: {error_details}")
+
+    except ConnectionRefusedError:
+        pytest.fail(f"Connection to {uri} was refused.")
+    except Exception as e:
+        pytest.fail(f"test_component_update_input_not_found failed: {e}")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("params, expected_message_part", [
+    ({"inputs": {"data": "value"}}, "Missing or invalid 'componentName'"), # Missing componentName
+    ({"componentName": 123, "inputs": {"data": "value"}}, "Missing or invalid 'componentName'"), # componentName not a string
+    ({"componentName": "TestComponent"}, "Missing or invalid 'inputs'"), # Missing inputs
+    ({"componentName": "TestComponent", "inputs": "not_an_object"}, "Missing or invalid 'inputs'"), # inputs not an object
+    ({}, "Missing or invalid 'componentName'"), # Empty params
+])
+async def test_component_update_input_invalid_params(test_server, params, expected_message_part):
+    uri = f"ws://localhost:{WS_PORT}"
+    request_id = f"comp-invp-{hash(json.dumps(params))}" # Unique ID for parametrized test
+
+    request = {
+        "jsonrpc": "2.0",
+        "method": "component.updateInput",
+        "params": params,
+        "id": request_id
+    }
+
+    try:
+        response = await send_json_rpc_request(uri, request)
+        assert response.get("jsonrpc") == "2.0"
+        assert response.get("id") == request_id
+        assert "error" in response, "Response missing 'error' field for invalid params."
+
+        error_details = response["error"]
+        assert error_details.get("code") == -32602 # Invalid Params
+        assert expected_message_part in error_details.get("message", ""), \
+            f"Error message '{error_details.get('message', '')}' did not contain '{expected_message_part}' for params: {params}"
+
+        print(f"Invalid params response for {params}: {error_details}")
+
+    except ConnectionRefusedError:
+        pytest.fail(f"Connection to {uri} was refused.")
+    except Exception as e:
+        pytest.fail(f"test_component_update_input_invalid_params failed for {params}: {e}")

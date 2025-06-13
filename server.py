@@ -5,6 +5,9 @@ from urllib.parse import urlparse, parse_qs # Added for URL parsing
 import asyncio
 import websockets
 import threading
+from pathlib import Path
+
+from backend.component_registry import ComponentRegistry
 
 # Attempt to import the backend module
 # This path needs to be correct based on where server.py is run from
@@ -76,7 +79,7 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
             self.send_error(404, "Endpoint not found")
 
 
-async def websocket_handler(websocket, path, chat_backend):
+async def websocket_handler(websocket, path, chat_backend, registry: ComponentRegistry):
     print(f"Client connected: {websocket.remote_address}")
     try:
         async for message_str in websocket:
@@ -125,6 +128,40 @@ async def websocket_handler(websocket, path, chat_backend):
                         "result": backend_response,
                         "id": request_id
                     }
+                elif method == "component.updateInput":
+                    if not isinstance(params, dict):
+                        raise ValueError("Invalid params for 'component.updateInput' (must be an object).")
+
+                    component_name = params.get("componentName")
+                    inputs_data = params.get("inputs")
+
+                    if not isinstance(component_name, str):
+                        raise ValueError("Missing or invalid 'componentName' in params for 'component.updateInput' (must be a string).")
+                    if not isinstance(inputs_data, dict):
+                        raise ValueError("Missing or invalid 'inputs' in params for 'component.updateInput' (must be an object).")
+
+                    component_instance = registry.get_component_instance(component_name)
+                    if component_instance is None:
+                        response_data = {
+                            "jsonrpc": "2.0",
+                            "error": {"code": -32001, "message": f"Component '{component_name}' not found."},
+                            "id": request_id
+                        }
+                    else:
+                        try:
+                            response_content = component_instance.update(inputs_data)
+                            response_data = {
+                                "jsonrpc": "2.0",
+                                "result": response_content,
+                                "id": request_id
+                            }
+                        except Exception as e:
+                            print(f"Error during component '{component_name}' update: {e}")
+                            response_data = {
+                                "jsonrpc": "2.0",
+                                "error": {"code": -32002, "message": f"Component error in '{component_name}': {type(e).__name__} - {e}"},
+                                "id": request_id
+                            }
                 else:
                     # Method not found
                     raise ValueError(f"Method '{method}' not found.")
@@ -178,9 +215,15 @@ async def main():
     # Ensure server.py can find the components directory
     import sys
     import os
-    project_root = os.path.abspath(os.path.dirname(__file__))
-    if project_root not in sys.path:
-        sys.path.insert(0, project_root)
+    # project_root = os.path.abspath(os.path.dirname(__file__)) # Original
+    project_root = Path(__file__).resolve().parent # Use Path for robustness
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+
+    # Initialize the ComponentRegistry
+    registry = ComponentRegistry()
+    registry.discover_components(project_root / "components")
+    print(f"Component registry initialized. Found {len(registry.manifests)} components.")
 
     # Initialize the backend
     backend_instance = None
@@ -315,7 +358,7 @@ async def setup_and_start_servers():
     http_server_thread.daemon = True
 
     # Configure WebSocket server
-    bound_websocket_handler = lambda ws, path: websocket_handler(ws, path, backend_instance)
+    bound_websocket_handler = lambda ws, path: websocket_handler(ws, path, backend_instance, registry)
 
     # The actual websockets.Server object is returned by websockets.serve()
     # This object can be used to close the server.
