@@ -169,3 +169,11 @@ if (sidebarDiv) {
 } else {
   console.error("Sidebar element not found! Cannot initialize sidebar stage or dummy component.");
 }
+
+// Render the AIChatInterface component
+const chatContainer = document.getElementById('react-chat-container');
+if (chatContainer) {
+  ReactDOM.render(React.createElement(AIChatInterface), chatContainer);
+} else {
+  console.error('Error: react-chat-container not found in the DOM.');
+}
