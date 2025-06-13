@@ -1,3 +1,5 @@
+from backend.utils import emit
+
 class AIChatInterfaceBackend:
     def __init__(self):
         # In a real scenario, this might load a model or set up connections.
@@ -40,11 +42,7 @@ class AIChatInterfaceBackend:
             # But for now, let's stick to the prompt's direct instructions.
             return self.process_request(user_input, temperature, max_tokens)
         else:
-            return {
-                "responseText": "No input provided.",
-                "responseStream": "",
-                "error": False
-            }
+            return emit("responseText", "No input provided.")
 
     def process_request(self, user_input: str, temperature: float = 0.7, max_tokens: int = 256):
         """
@@ -61,7 +59,18 @@ class AIChatInterfaceBackend:
         print(f"Received request: userInput='{user_input}', temperature={temperature}, max_tokens={max_tokens}")
 
         # Call the mock LLM API
-        return AIChatInterfaceBackend.mock_llm_api(user_input, temperature, max_tokens)
+        api_result = AIChatInterfaceBackend.mock_llm_api(user_input, temperature, max_tokens)
+
+        if api_result.get("error"):
+            # If 'error' field is present and truthy (e.g., a non-empty string or True)
+            return emit("error", api_result["error"])
+        elif api_result.get("responseStream"):
+            # If there's stream data, prioritize it.
+            # This will result in responseText being empty unless mock_llm_api also includes it in the stream.
+            return emit("responseStream", api_result["responseStream"])
+        else:
+            # Default to responseText if no error and no stream.
+            return emit("responseText", api_result.get("responseText", "")) # Use .get for safety
 
 if __name__ == '__main__':
     # Example Usage (for testing purposes)
