@@ -4,11 +4,13 @@ const AIChatInterface = () => {
   const [maxTokens, setMaxTokens] = React.useState(256);
   const [responseText, setResponseText] = React.useState('');
   const [isLoading, setIsLoading] = React.useState(false);
+  const [isStreaming, setIsStreaming] = React.useState(false);
   const [error, setError] = React.useState(null);
 
   const handleSubmit = async (event) => {
     event.preventDefault();
     setIsLoading(true);
+    setIsStreaming(true);
     setError(null);
     setResponseText(''); // Clear previous response
 
@@ -41,6 +43,7 @@ const AIChatInterface = () => {
       setError(error.message || 'An unexpected error occurred.');
     } finally {
       setIsLoading(false);
+      setIsStreaming(false);
     }
   };
 
@@ -103,7 +106,12 @@ const AIChatInterface = () => {
       React.createElement(
         'button',
         { type: 'submit', disabled: isLoading },
-        isLoading ? 'Loading...' : 'Submit'
+        isLoading && !isStreaming ? 'Sending...' : 'Submit'
+      ),
+      isStreaming && React.createElement(
+        'div',
+        { style: { marginTop: '10px'} },
+        'AI is typing...'
       )
     ),
     error && React.createElement(
