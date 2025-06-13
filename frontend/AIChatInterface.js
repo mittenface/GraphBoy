@@ -33,10 +33,12 @@ const AIChatInterface = () => {
 
       const data = await response.json();
       console.log('Success:', data);
-      if (data.responseText) {
+      if (data.error) {
+        setError(data.error);
+      } else if (data.responseText) {
         setResponseText(data.responseText);
       } else {
-        setError('No responseText found in the response.');
+        setError('No actionable content in response.');
       }
     } catch (error) {
       console.error('Error:', error);
