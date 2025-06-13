@@ -129,10 +129,38 @@ if (sidebarDiv) {
       componentGroup.add(newRect);
       componentGroup.add(label);
 
+      // Define port appearance
+      const portRadius = 5;
+      const portFill = 'gray';
+      const portStroke = 'black';
+      const portStrokeWidth = 1;
+
+      // Create input port
+      var inputPort = new Konva.Circle({
+        x: 0, // Left edge of the newRect
+        y: newRect.height() / 2, // Vertically centered
+        radius: portRadius,
+        fill: portFill,
+        stroke: portStroke,
+        strokeWidth: portStrokeWidth
+      });
+      componentGroup.add(inputPort);
+
+      // Create output port
+      var outputPort = new Konva.Circle({
+        x: newRect.width(), // Right edge of the newRect
+        y: newRect.height() / 2, // Vertically centered
+        radius: portRadius,
+        fill: portFill,
+        stroke: portStroke,
+        strokeWidth: portStrokeWidth
+      });
+      componentGroup.add(outputPort);
+
       // Add the group to the main layer
       mainLayer.add(componentGroup);
-      mainLayer.draw();
-      console.log("New component group (rect + label) created on main stage and main layer redrawn.");
+      mainLayer.draw(); // Ensure this is called after all additions
+      console.log("New component group with ports created on main stage.");
     } else {
       console.log(`Drop position (main stage relative): X=${pointerPosition.x}, Y=${pointerPosition.y} - Outside main stage bounds.`);
     }
