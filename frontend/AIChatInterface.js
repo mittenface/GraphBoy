@@ -170,7 +170,7 @@ const AIChatInterface = () => {
       React.createElement(
         'label',
         { htmlFor: 'userInput' },
-        'User Input:'
+        '[Input Port] User Input:'
       ),
       React.createElement('textarea', {
         id: 'userInput',
@@ -184,7 +184,7 @@ const AIChatInterface = () => {
       React.createElement(
         'label',
         { htmlFor: 'temperature' },
-        'Temperature:'
+        '[Input Port] Temperature:'
       ),
       React.createElement('input', {
         type: 'number',
@@ -202,7 +202,7 @@ const AIChatInterface = () => {
       React.createElement(
         'label',
         { htmlFor: 'maxTokens' },
-        'Max Tokens:'
+        '[Input Port] Max Tokens:'
       ),
       React.createElement('input', {
         type: 'number',
@@ -229,17 +229,22 @@ const AIChatInterface = () => {
         'div',
         { style: { marginTop: '10px'} },
         'AI is typing...'
+      ),
+      isLoading && isStreaming && React.createElement(
+        'div',
+        { style: { marginTop: '10px'} },
+        '[Output Port: responseStream active]'
       )
     ),
     error && React.createElement(
       'div',
       { style: { color: 'red', marginTop: '10px', whiteSpace: 'pre-wrap' } }, // pre-wrap for better error display
-      `Error: ${error}`
+      `Error: [Output Port] ${error}`
     ),
     responseText && React.createElement(
       'div',
       { style: { marginTop: '20px', padding: '10px', border: '1px solid #ccc', whiteSpace: 'pre-wrap' } },
-      React.createElement('h3', null, 'AI Response:'),
+      React.createElement('h3', null, '[Output Port] AI Response:'),
       responseText
     )
   );
