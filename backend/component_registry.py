@@ -1,11 +1,17 @@
 import os
 import json
 import importlib
+import logging # Added
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, TYPE_CHECKING # Added TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from backend.event_bus import EventBus # Added for type hinting
 
 # Using a placeholder for ComponentManifest as shared_types is not available
 ComponentManifest = Dict[str, Any]
+
+logger = logging.getLogger(__name__) # Added
 
 class ComponentInterface:
     """
@@ -25,19 +31,21 @@ class ComponentInterface:
         raise NotImplementedError
 
 class ComponentRegistry:
-    def __init__(self) -> None:
+    def __init__(self, event_bus: 'EventBus | None' = None) -> None: # Modified
         self.manifests: Dict[str, ComponentManifest] = {}
         self.instances: Dict[str, Any] = {}
+        self.event_bus = event_bus # Added
+        logger.info(f"ComponentRegistry initialized {'with' if event_bus else 'without'} EventBus.") # Added logging
 
     def discover_components(self, components_dir_path: str | Path) -> None:
         if not isinstance(components_dir_path, Path):
             components_dir_path = Path(components_dir_path)
 
         if not components_dir_path.is_dir():
-            # Use logger if available, otherwise print
-            # logger.error(f"Components directory not found at {components_dir_path}")
-            print(f"Error: Components directory not found at {components_dir_path}")
+            logger.error(f"Components directory not found at {components_dir_path}") # Changed to logger
             return
+
+        logger.info(f"Starting component discovery in directory: {components_dir_path}") # Added logging
 
         for item in components_dir_path.iterdir():
             if item.is_dir():
@@ -50,49 +58,48 @@ class ComponentRegistry:
                         # Validate required keys by attempting to create ComponentManifest
                         # try:
                         component_name = manifest_data['name']
-                        # component_version = manifest_data['version'] # Not strictly needed by registry logic
-                        # component_description = manifest_data['description'] # Not strictly needed
-
-                        # Using the placeholder ComponentManifest = Dict[str, Any]
                         manifest: ComponentManifest = manifest_data
                         self.manifests[component_name] = manifest
-                        # print(f"Successfully loaded manifest for component: {component_name}")
+                        logger.debug(f"Successfully loaded manifest for component: {component_name} from {manifest_path}") # Changed to logger
 
                         # Dynamically load and instantiate component backend
                         try:
-                            module_name = f"components.{item.name}.backend"
-                            class_name = f"{item.name}Backend"
+                            module_name = f"components.{item.name}.backend" # Assuming item.name is the component's directory name
+                            class_name = manifest_data.get("backend_class", f"{item.name.capitalize()}Backend") # Use manifest or derive
 
                             module = importlib.import_module(module_name)
                             component_class = getattr(module, class_name)
 
-                            self.instances[component_name] = component_class()
-                            # print(f"Successfully instantiated backend for component: {component_name}")
-                        except ImportError:
-                            print(f"Error: Could not import backend module {module_name} for component {component_name}")
-                        except AttributeError:
-                            print(f"Error: Could not find class {class_name} in module {module_name} for component {component_name}")
-                        except Exception as e:
-                            print(f"Error: Could not instantiate backend for component {component_name}: {e}")
+                            init_kwargs = {}
+                            if self.event_bus:
+                                init_kwargs["event_bus"] = self.event_bus
 
-                        # except KeyError as e:
-                        #     print(f"Error: Missing key {e} in manifest {manifest_path}")
-                        # except Exception as e: # Catch other errors during TypedDict creation
-                        #     print(f"Error: Could not create ComponentManifest for {manifest_path}: {e}") # type: ignore
+                            # Check if 'settings' is expected by the constructor (optional)
+                            # This requires more advanced introspection or a convention
+                            # For now, only pass event_bus if it's defined.
+
+                            self.instances[component_name] = component_class(**init_kwargs)
+                            logger.info(f"Successfully instantiated backend for component: {component_name} (Class: {class_name})") # Changed to logger
+                        except ImportError:
+                            logger.error(f"Could not import backend module {module_name} for component {component_name}", exc_info=True) # Changed to logger
+                        except AttributeError:
+                            logger.error(f"Could not find class {class_name} in module {module_name} for component {component_name}", exc_info=True) # Changed to logger
+                        except Exception as e:
+                            logger.error(f"Could not instantiate backend for component {component_name}: {e}", exc_info=True) # Changed to logger
 
                     except json.JSONDecodeError:
-                        print(f"Error: Malformed JSON in manifest file: {manifest_path}") # type: ignore
-                    except FileNotFoundError: # Should not happen due to manifest_path.exists()
-                        print(f"Error: Manifest file not found: {manifest_path}") # type: ignore
-                    except KeyError as e: # Catch KeyErrors from manifest_data['name']
-                        print(f"Error: Missing key 'name' in manifest {manifest_path}: {e}")
+                        logger.error(f"Malformed JSON in manifest file: {manifest_path}", exc_info=True) # Changed to logger
+                    except FileNotFoundError:
+                        logger.error(f"Manifest file not found: {manifest_path}", exc_info=True) # Changed to logger
+                    except KeyError as e:
+                        logger.error(f"Missing key 'name' in manifest {manifest_path}: {e}", exc_info=True) # Changed to logger
                     except Exception as e:
-                        print(f"An unexpected error occurred while processing {manifest_path}: {e}") # type: ignore
-                # else:
-                    # print(f"Info: No manifest.json found in component directory: {item}")
-        # print(f"Discovery complete. Found {len(self.manifests)} components.")
+                        logger.error(f"An unexpected error occurred while processing {manifest_path}: {e}", exc_info=True) # Changed to logger
+                else:
+                    logger.debug(f"No manifest.json found in component directory: {item}, skipping.") # Added logging
+        logger.info(f"Component discovery complete. Found {len(self.manifests)} manifests and instantiated {len(self.instances)} components.") # Changed to logger
 
-    def get_component_manifest(self, component_name: str) -> ComponentManifest | None: # type: ignore
+    def get_component_manifest(self, component_name: str) -> ComponentManifest | None:
         """
         Retrieves the manifest for a given component name.
 
@@ -121,8 +128,7 @@ class ComponentRegistry:
         Manually registers a component class and its instance.
         """
         if name in self.instances:
-            # Using print for now, logger would be better in a real application
-            print(f"Warning: Component '{name}' is being re-registered.")
+            logger.warning(f"Component '{name}' is being re-registered.") # Changed to logger
 
         self.instances[name] = instance
 
@@ -134,4 +140,4 @@ class ComponentRegistry:
                 "description": f"Manually registered component: {component_class.__name__}",
                 # Add other fields if your ComponentManifest type expects them
             }
-        print(f"Component '{name}' registered with instance {instance}.")
+        logger.info(f"Component '{name}' (Class: {component_class.__name__}) registered manually with instance {instance}.") # Changed to logger

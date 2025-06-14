@@ -1,96 +1,128 @@
+# components/AIChatInterface/backend.py
+import asyncio # Added for potential async operations in future event handlers
+import logging
+from typing import Callable, Any, Dict, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from backend.event_bus import EventBus # For type hinting
+
+logger = logging.getLogger(__name__)
+
 class AIChatInterfaceBackend:
-    def __init__(self, component_id: str, send_component_output_func):
-        # In a real scenario, this might load a model or set up connections.
-        self.config = {}
+    def __init__(self, component_id: str, send_component_output_func: Callable[..., Any], event_bus: 'EventBus | None' = None, **kwargs: Any):
+        self.config: Dict[str, Any] = {}
         self.component_id = component_id
         self.send_output_func = send_component_output_func
-        print(f"AIChatInterfaceBackend {self.component_id} initialized.")
+        self.event_bus = event_bus # Store the event_bus instance
+
+        # Log the presence or absence of the event bus
+        if self.event_bus:
+            logger.info(f"AIChatInterfaceBackend '{self.component_id}' initialized with EventBus.")
+            # Example: Subscribe to an event (actual event_type and handler would depend on application needs)
+            # asyncio.create_task(self.event_bus.subscribe("some_system_event", self.handle_system_event))
+        else:
+            logger.info(f"AIChatInterfaceBackend '{self.component_id}' initialized WITHOUT EventBus.")
+
+    # Placeholder for a potential event handler
+    # async def handle_system_event(self, event_data: Any):
+    #     logger.info(f"Component '{self.component_id}' received system_event: {event_data}")
+    #     # Potentially interact with the component's state or send output
 
     @staticmethod
     async def mock_llm_api(user_input: str, temperature: float, max_tokens: int):
-        """
-        Mock LLM API function.
-        """
+        logger.debug(f"mock_llm_api called with: user_input='{user_input}', temperature={temperature}, max_tokens={max_tokens}")
         return {
             "responseText": f"Mock LLM response to '{user_input}' (temp={temperature}, tokens={max_tokens})",
             "responseStream": f"Mock LLM stream for '{user_input}' chunk 1\nMock LLM stream for '{user_input}' chunk 2\n",
-            "error": False,
+            "error": None, # Changed from False to None for consistency, assuming error would contain a message string
         }
 
     def create(self, config: dict):
-        """
-        Stores the configuration for the AIChatInterface.
-        """
         self.config = config
-        # In a real backend, you might use this config to initialize things
-        print(f"AIChatInterfaceBackend {self.component_id} created with config: {self.config}")
+        logger.info(f"AIChatInterfaceBackend '{self.component_id}' created/configured with: {self.config}")
+        # Example: Publish an event after configuration (if useful)
+        # if self.event_bus:
+        #    asyncio.create_task(self.event_bus.publish(f"component.{self.component_id}.configured", {"config": self.config}))
         return {"status": "success", "message": "Configuration received."}
 
     async def update(self, inputs: dict):
-        """
-        Processes user input and emits response via send_output_func.
-        """
+        logger.debug(f"AIChatInterfaceBackend '{self.component_id}' update called with inputs: {inputs}")
         if 'userInput' in inputs:
             user_input = inputs['userInput']
             temperature = inputs.get('temperature', 0.7)
             max_tokens = inputs.get('max_tokens', 256)
 
             await self.process_request(user_input, temperature, max_tokens)
-            return {"status": "success", "message": "Output will be sent via component.emitOutput"}
+            return {"status": "success", "message": "Output processing initiated, will be sent via component.emitOutput"}
         else:
-            await self.send_output_func(self.component_id, "error", "No input provided.")
-            return {"status": "error", "message": "No input provided, error emitted."}
+            error_message = "No userInput provided in inputs."
+            logger.warning(f"AIChatInterfaceBackend '{self.component_id}': {error_message}")
+            # It's good practice to also inform the client if an error occurs due to bad input
+            await self.send_output_func(self.component_id, "error", {"message": error_message})
+            return {"status": "error", "message": error_message} # Return error status to JSON-RPC caller
 
     async def process_request(self, user_input: str, temperature: float = 0.7, max_tokens: int = 256):
-        """
-        Simulates processing a user's chat input and emits the response.
+        logger.info(f"AIChatInterfaceBackend '{self.component_id}' processing request: userInput='{user_input}', temp={temperature}, tokens={max_tokens}")
 
-        Args:
-            user_input: The text input from the user.
-            temperature: The temperature setting for the language model.
-            max_tokens: The maximum number of tokens for the response.
-
-        Returns:
-            None (Output is sent via WebSocket using send_output_func)
-        """
-        print(f"AIChatInterfaceBackend {self.component_id} received request: userInput='{user_input}', temperature={temperature}, max_tokens={max_tokens}")
-
-        # Call the mock LLM API
         api_result = await AIChatInterfaceBackend.mock_llm_api(user_input, temperature, max_tokens)
 
         if api_result.get("error"):
-            await self.send_output_func(self.component_id, "error", api_result["error"])
+            logger.error(f"AIChatInterfaceBackend '{self.component_id}' encountered an API error: {api_result['error']}")
+            await self.send_output_func(self.component_id, "error", {"message": api_result["error"]})
         elif api_result.get("responseStream"):
-            await self.send_output_func(self.component_id, "responseStream", api_result["responseStream"])
+            logger.debug(f"AIChatInterfaceBackend '{self.component_id}' sending stream output.")
+            await self.send_output_func(self.component_id, "responseStream", {"streamContent": api_result["responseStream"]})
+        elif api_result.get("responseText") is not None: # Check for not None, as empty string is a valid response
+            logger.debug(f"AIChatInterfaceBackend '{self.component_id}' sending text output.")
+            await self.send_output_func(self.component_id, "responseText", {"text": api_result["responseText"]})
         else:
-            await self.send_output_func(self.component_id, "responseText", api_result.get("responseText", ""))
+            logger.warning(f"AIChatInterfaceBackend '{self.component_id}': API result had no error, stream, or text. Result: {api_result}")
+            # Optionally send a generic error or a "no_response" message
+            await self.send_output_func(self.component_id, "error", {"message": "No response generated by the LLM."})
 
-# Example Usage (for testing purposes, requires a mock send_component_output_func)
+
 if __name__ == '__main__':
     import asyncio
 
+    # Setup basic logging for the __main__ example
+    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
     async def mock_send_output(component_id, output_name, data):
-        print(f"MOCK_SEND_OUTPUT: component_id='{component_id}', output_name='{output_name}', data='{data}'")
+        logger.info(f"MOCK_SEND_OUTPUT: component_id='{component_id}', output_name='{output_name}', data='{data}'")
+
+    # Mock EventBus for standalone testing
+    class MockEventBus:
+        async def subscribe(self, event_type, callback):
+            logger.debug(f"MockEventBus: {callback.__name__} subscribed to {event_type}")
+        async def publish(self, event_type, *args, **kwargs):
+            logger.debug(f"MockEventBus: Published {event_type} with {args}, {kwargs}")
 
     async def main_test():
-        backend = AIChatInterfaceBackend(component_id="test-chat", send_component_output_func=mock_send_output)
+        mock_bus = MockEventBus()
+        # Pass component_id, send_output_func, and the event_bus
+        backend = AIChatInterfaceBackend(
+            component_id="test-chat-001",
+            send_component_output_func=mock_send_output,
+            event_bus=mock_bus
+        )
+        backend_no_bus = AIChatInterfaceBackend(
+            component_id="test-chat-002",
+            send_component_output_func=mock_send_output
+            # event_bus is omitted, will default to None
+        )
 
-        print("\n--- Test Case 1: Basic Input ---")
-        sample_input = "Hello, AI!"
-        response = await backend.update({"userInput": sample_input})
-        print(f"Update response for '{sample_input}': {response}")
 
-        print("\n--- Test Case 2: Custom Parameters ---")
-        sample_input_custom = "Tell me a story."
-        response_custom = await backend.update({
-            "userInput": sample_input_custom,
-            "temperature": 0.5,
-            "max_tokens": 100
-        })
-        print(f"Update response for '{sample_input_custom}': {response_custom}")
+        logger.info("\n--- Test Case 1: Basic Input (with EventBus) ---")
+        await backend.update({"userInput": "Hello, AI!"})
 
-        print("\n--- Test Case 3: No Input ---")
-        response_no_input = await backend.update({})
-        print(f"Update response for no input: {response_no_input}")
+        logger.info("\n--- Test Case 2: Custom Parameters (with EventBus) ---")
+        await backend.update({"userInput": "Tell me a story.", "temperature": 0.5, "max_tokens": 100})
+
+        logger.info("\n--- Test Case 3: No Input (with EventBus) ---")
+        await backend.update({})
+
+        logger.info("\n--- Test Case 4: Basic Input (NO EventBus) ---")
+        await backend_no_bus.update({"userInput": "Hello again, AI!"})
+
 
     asyncio.run(main_test())
