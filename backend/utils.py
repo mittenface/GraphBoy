@@ -29,6 +29,8 @@ def emit(output_name: str, value: Any) -> Dict[str, Any]:
         # Optionally, handle unknown output_name, e.g., by logging a warning
         # or raising an error, or simply ignoring it.
         # For now, we'll assume valid inputs as per the intended use.
-        print(f"Warning: Unknown output_name '{output_name}' provided to emit function.")
+        print(
+            f"Warning: Unknown output_name '{output_name}' provided to emit function."
+        )
 
     return response

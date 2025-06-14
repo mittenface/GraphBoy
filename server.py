@@ -1,7 +1,7 @@
 import http.server
 import socketserver
 import json
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse # parse_qs removed
 import asyncio
 import websockets
 import threading
@@ -22,7 +22,8 @@ WS_PORT = 5001
 # New: WebSocket process_request_hook
 async def process_request_hook(websocket, path_from_hook):
     """
-    Hook to capture the request path and attach it to the websocket connection object.
+    Hook to capture the request path and attach it to the websocket
+    connection object.
     """
     # print(f"Process_request_hook: Path '{path_from_hook}' for {websocket.remote_address}")
     websocket.actual_request_path = path_from_hook
@@ -72,17 +73,22 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
 
 # Modified: websocket_handler signature and path access
 async def websocket_handler(websocket, chat_backend, registry: ComponentRegistry):
-    request_path = getattr(websocket, 'actual_request_path', '/') # Get path from hook
+    # Get path from hook
+    request_path = getattr(websocket, 'actual_request_path', '/')
     print(f"Client connected from {websocket.remote_address} on path '{request_path}'")
     try:
         async for message_str in websocket:
             request_id = None
             try:
-                # print(f"Received message from {websocket.remote_address} on path '{request_path}': {message_str}")
+                # print(
+                #    f"Received message from {websocket.remote_address} on path "
+                #    f"'{request_path}': {message_str}"
+                # )
                 request = json.loads(message_str)
                 request_id = request.get("id")
 
-                if not all(k in request for k in ("jsonrpc", "method")) or request.get("jsonrpc") != "2.0":
+                if (not all(k in request for k in ("jsonrpc", "method")) or
+                        request.get("jsonrpc") != "2.0"):
                     raise ValueError("Invalid JSON-RPC request structure.")
                 if not isinstance(request.get("method" ), str):
                      raise ValueError("Invalid JSON-RPC method (must be string).")
@@ -96,10 +102,14 @@ async def websocket_handler(websocket, chat_backend, registry: ComponentRegistry
                     if not chat_backend:
                         raise RuntimeError("Chat backend not available.")
                     if not isinstance(params, dict):
-                        raise ValueError("Invalid params for 'chat' method (must be an object).")
+                        raise ValueError(
+                            "Invalid params for 'chat' method (must be an object)."
+                        )
                     user_input = params.get("userInput")
                     if user_input is None:
-                        raise ValueError("Missing 'userInput' in params for 'chat' method.")
+                        raise ValueError(
+                            "Missing 'userInput' in params for 'chat' method."
+                        )
                     temperature = params.get("temperature", 0.7)
                     max_tokens = params.get("maxTokens", 256)
                     backend_response = chat_backend.process_request(
@@ -107,73 +117,115 @@ async def websocket_handler(websocket, chat_backend, registry: ComponentRegistry
                         temperature=temperature,
                         max_tokens=max_tokens
                     )
-                    response_data = {"jsonrpc": "2.0", "result": backend_response, "id": request_id}
+                    response_data = {"jsonrpc": "2.0",
+                                     "result": backend_response, "id": request_id}
                 elif method == "component.updateInput":
                     if not isinstance(params, dict):
-                        raise ValueError("Invalid params for 'component.updateInput' (must be an object).")
+                        raise ValueError(
+                            "Invalid params for 'component.updateInput' (must be an object)."
+                        )
                     component_name = params.get("componentName")
                     inputs_data = params.get("inputs")
                     if not isinstance(component_name, str):
-                        raise ValueError("Missing or invalid 'componentName' in params for 'component.updateInput' (must be a string).")
+                        raise ValueError(
+                            "Missing or invalid 'componentName' in params for "
+                            "'component.updateInput' (must be a string)."
+                        )
                     if not isinstance(inputs_data, dict):
-                        raise ValueError("Missing or invalid 'inputs' in params for 'component.updateInput' (must be an object).")
+                        raise ValueError(
+                            "Missing or invalid 'inputs' in params for "
+                            "'component.updateInput' (must be an object)."
+                        )
 
                     component_instance = registry.get_component_instance(component_name)
                     if component_instance is None:
                         response_data = {
                             "jsonrpc": "2.0",
-                            "error": {"code": -32001, "message": f"Component '{component_name}' not found."},
+                            "error": {"code": -32001,
+                                      "message": f"Component '{component_name}' not found."},
                             "id": request_id
                         }
                     else:
                         try:
                             response_content = component_instance.update(inputs_data)
-                            response_data = {"jsonrpc": "2.0", "result": response_content, "id": request_id}
+                            response_data = {"jsonrpc": "2.0",
+                                             "result": response_content,
+                                             "id": request_id}
                         except Exception as e:
                             print(f"Error during component '{component_name}' update: {e}")
                             response_data = {
                                 "jsonrpc": "2.0",
-                                "error": {"code": -32002, "message": f"Component error in '{component_name}': {type(e).__name__} - {e}"},
+                                "error": {"code": -32002,
+                                          "message": f"Component error in '{component_name}': {type(e).__name__} - {e}"},
                                 "id": request_id
                             }
                 else:
                     raise ValueError(f"Method '{method}' not found.")
             except json.JSONDecodeError:
-                response_data = {"jsonrpc": "2.0", "error": {"code": -32700, "message": "Parse error"}, "id": None}
+                response_data = {"jsonrpc": "2.0",
+                                 "error": {"code": -32700, "message": "Parse error"},
+                                 "id": None}
             except ValueError as ve:
                 error_code = -32602
-                if "Invalid JSON-RPC" in str(ve) or "missing id" in str(ve): error_code = -32600
-                elif "Method not found" in str(ve): error_code = -32601
-                response_data = {"jsonrpc": "2.0", "error": {"code": error_code, "message": str(ve)}, "id": request_id}
+                if "Invalid JSON-RPC" in str(ve) or "missing id" in str(ve):
+                    error_code = -32600
+                elif "Method not found" in str(ve):
+                    error_code = -32601
+                response_data = {"jsonrpc": "2.0",
+                                 "error": {"code": error_code, "message": str(ve)},
+                                 "id": request_id}
             except RuntimeError as re:
-                 response_data = {"jsonrpc": "2.0", "error": {"code": -32000, "message": str(re)}, "id": request_id}
+                 response_data = {"jsonrpc": "2.0",
+                                  "error": {"code": -32000, "message": str(re)},
+                                  "id": request_id}
             except Exception as e:
                 print(f"Internal error processing WebSocket message: {e}")
-                response_data = {"jsonrpc": "2.0", "error": {"code": -32603, "message": f"Internal error: {type(e).__name__} - {e}"}, "id": request_id}
+                response_data = {"jsonrpc": "2.0",
+                                 "error": {"code": -32603,
+                                           "message": f"Internal error: {type(e).__name__} - {e}"},
+                                 "id": request_id}
 
             await websocket.send(json.dumps(response_data))
-            # print(f"Sent response to {websocket.remote_address}: {json.dumps(response_data)}")
+            # print(
+            #     f"Sent response to {websocket.remote_address}: "
+            #     f"{json.dumps(response_data)}"
+            # )
     except websockets.exceptions.ConnectionClosedOK:
-        print(f"Client disconnected gracefully: {websocket.remote_address} from path '{request_path}'")
+        print(
+            f"Client disconnected gracefully: {websocket.remote_address} "
+            f"from path '{request_path}'"
+        )
     except websockets.exceptions.ConnectionClosedError as e:
-        print(f"Client connection closed with error: {websocket.remote_address} from path '{request_path}', Error: {e}")
+        print(
+            f"Client connection closed with error: {websocket.remote_address} "
+            f"from path '{request_path}', Error: {e}"
+        )
     except Exception as e:
-        print(f"Overall error in WebSocket connection for {websocket.remote_address} on path '{request_path}': {e}")
+        print(
+            f"Overall error in WebSocket connection for {websocket.remote_address} "
+            f"on path '{request_path}': {e}"
+        )
     finally:
-        print(f"Connection closed for {websocket.remote_address} from path '{request_path}'")
+        print(
+            f"Connection closed for {websocket.remote_address} from path '{request_path}'"
+        )
 
 # Modified: setup_and_start_servers to use process_request_hook and functools.partial
 async def setup_and_start_servers():
     import sys # Ensure sys is imported if not already at top level
-    import os  # Ensure os is imported
-    project_root = os.path.abspath(os.path.dirname(__file__))
+    # import os  # Ensure os is imported # os removed
+    # Replaced os.path.abspath(os.path.dirname(__file__))
+    project_root = str(Path(__file__).resolve().parent)
     if project_root not in sys.path:
         sys.path.insert(0, project_root)
 
     registry = ComponentRegistry() # Moved registry initialization here
     components_path = Path(project_root) / "components" # Define components_path
     registry.discover_components(components_path)
-    print(f"Component registry initialized in setup_and_start_servers. Found {len(registry.manifests)} components.")
+    print(
+        f"Component registry initialized in setup_and_start_servers. "
+        f"Found {len(registry.manifests)} components."
+    )
 
 
     backend_instance = None
@@ -182,27 +234,38 @@ async def setup_and_start_servers():
         try:
             from components.AIChatInterface.backend import AIChatInterfaceBackend as BackendFromComponents
             AIChatInterfaceBackend = BackendFromComponents
-            print("AIChatInterfaceBackend re-loaded successfully in setup_and_start_servers().")
+            print(
+                "AIChatInterfaceBackend re-loaded successfully in setup_and_start_servers()."
+            )
         except ImportError:
-            print("Warning: AIChatInterfaceBackend could not be imported in setup_and_start_servers().")
+            print(
+                "Warning: AIChatInterfaceBackend could not be imported in setup_and_start_servers()."
+            )
 
     if AIChatInterfaceBackend:
         backend_instance = AIChatInterfaceBackend()
         print("AIChatInterfaceBackend initialized.")
     else:
-        print("CRITICAL ERROR: AIChatInterfaceBackend is None. Chat functionalities will not work.")
+        print(
+            "CRITICAL ERROR: AIChatInterfaceBackend is None. "
+            "Chat functionalities will not work."
+        )
 
     CustomHandler.chat_backend = backend_instance
 
-    httpd = socketserver.TCPServer(("0.0.0.0", PORT), CustomHandler, bind_and_activate=False)
+    httpd = socketserver.TCPServer(("0.0.0.0", PORT), CustomHandler,
+                                   bind_and_activate=False)
     httpd.allow_reuse_address = True
     httpd.server_bind()
     httpd.server_activate()
-    http_server_thread = threading.Thread(target=httpd.serve_forever, name="HTTPThread")
+    http_server_thread = threading.Thread(target=httpd.serve_forever,
+                                          name="HTTPThread")
     http_server_thread.daemon = True
 
     # Modified: Use functools.partial for the handler
-    bound_websocket_handler = functools.partial(websocket_handler, chat_backend=backend_instance, registry=registry)
+    bound_websocket_handler = functools.partial(websocket_handler,
+                                                chat_backend=backend_instance,
+                                                registry=registry)
 
     ws_server_object = await websockets.serve(
         bound_websocket_handler,
@@ -232,48 +295,69 @@ async def stop_servers(httpd, http_server_thread, ws_server_instance):
 
 # Modified: main() to use process_request_hook and functools.partial correctly
 async def main():
-    # Ensure server.py can find the components directory (duplicating setup_and_start_servers logic for clarity if main is run directly)
+    # Ensure server.py can find the components directory (duplicating
+    # setup_and_start_servers logic for clarity if main is run directly)
     import sys
-    import os
+    # import os # os removed
     project_root_main = Path(__file__).resolve().parent
     if str(project_root_main) not in sys.path:
         sys.path.insert(0, str(project_root_main))
 
-    # Initialize registry for main scope if not using setup_and_start_servers directly for all parts
+    # Initialize registry for main scope if not using setup_and_start_servers
+    # directly for all parts
     registry_main = ComponentRegistry()
     registry_main.discover_components(project_root_main / "components")
-    print(f"Component registry initialized in main. Found {len(registry_main.manifests)} components.")
+    print(
+        f"Component registry initialized in main. "
+        f"Found {len(registry_main.manifests)} components."
+    )
 
     # Initialize backend for main scope
     backend_instance_main = None
-    global AIChatInterfaceBackend # Ensure global AIChatInterfaceBackend is accessible
-    if AIChatInterfaceBackend is None: # Check if it was successfully imported at the top or by setup
+    # Ensure global AIChatInterfaceBackend is accessible
+    global AIChatInterfaceBackend
+    # Check if it was successfully imported at the top or by setup
+    if AIChatInterfaceBackend is None:
         try:
             from components.AIChatInterface.backend import AIChatInterfaceBackend as BackendFromComponentsMain
-            AIChatInterfaceBackend = BackendFromComponentsMain # Make it available globally if re-imported
+            # Make it available globally if re-imported
+            AIChatInterfaceBackend = BackendFromComponentsMain
             print("AIChatInterfaceBackend re-loaded successfully in main().")
         except ImportError:
-            print("Warning: AIChatInterfaceBackend could not be imported even after sys.path modification in main().")
+            print(
+                "Warning: AIChatInterfaceBackend could not be imported even after "
+                "sys.path modification in main()."
+            )
 
     if AIChatInterfaceBackend:
         backend_instance_main = AIChatInterfaceBackend()
         print("AIChatInterfaceBackend initialized for main.")
     else:
-        print("CRITICAL ERROR: AIChatInterfaceBackend is None in main. Chat functionalities will not work.")
+        print(
+            "CRITICAL ERROR: AIChatInterfaceBackend is None in main. "
+            "Chat functionalities will not work."
+        )
 
-    CustomHandler.chat_backend = backend_instance_main # Ensure HTTP handler gets backend if main is entry point
+    # Ensure HTTP handler gets backend if main is entry point
+    CustomHandler.chat_backend = backend_instance_main
 
     # HTTP Server Setup (similar to setup_and_start_servers)
-    httpd_main = socketserver.TCPServer(("0.0.0.0", PORT), CustomHandler, bind_and_activate=False)
+    httpd_main = socketserver.TCPServer(("0.0.0.0", PORT), CustomHandler,
+                                        bind_and_activate=False)
     httpd_main.allow_reuse_address = True
     httpd_main.server_bind()
     httpd_main.server_activate()
-    http_server_thread_main = threading.Thread(target=httpd_main.serve_forever, name="HTTPThreadMain")
+    http_server_thread_main = threading.Thread(target=httpd_main.serve_forever,
+                                               name="HTTPThreadMain")
     http_server_thread_main.daemon = True
 
     # WebSocket Server Setup (similar to setup_and_start_servers)
     # Important: Use the registry and backend instance specific to this main's scope
-    bound_websocket_handler_main = functools.partial(websocket_handler, chat_backend=backend_instance_main, registry=registry_main)
+    bound_websocket_handler_main = functools.partial(
+        websocket_handler,
+        chat_backend=backend_instance_main,
+        registry=registry_main
+    )
 
     ws_server_instance_main = await websockets.serve(
         bound_websocket_handler_main,
@@ -283,7 +367,9 @@ async def main():
     )
 
     print(f"HTTP Server starting at http://0.0.0.0:{PORT} (from main)")
-    print(f"WebSocket Server starting at ws://0.0.0.0:{WS_PORT} (from main) with path hook")
+    print(
+        f"WebSocket Server starting at ws://0.0.0.0:{WS_PORT} (from main) with path hook"
+    )
 
     http_server_thread_main.start()
     print("HTTP server thread started (from main).")
@@ -300,13 +386,14 @@ async def main():
         print("KeyboardInterrupt received in main, shutting down...")
     finally:
         print("Main loop ending, initiating server shutdown (from main)...")
-        await stop_servers(httpd_main, http_server_thread_main, ws_server_instance_main)
+        await stop_servers(httpd_main, http_server_thread_main,
+                           ws_server_instance_main)
 
 if __name__ == '__main__':
-    # Note: The setup_and_start_servers() is primarily for tests or external management.
-    # The main() function here provides a runnable server instance.
-    # If tests are the primary user of setup_and_start_servers, ensure AIChatInterfaceBackend
-    # and registry are correctly scoped or passed.
+    # Note: The setup_and_start_servers() is primarily for tests or external
+    # management. The main() function here provides a runnable server instance.
+    # If tests are the primary user of setup_and_start_servers, ensure
+    # AIChatInterfaceBackend and registry are correctly scoped or passed.
     # For clarity, main() now has its own full setup.
     try:
         asyncio.run(main())

@@ -1,5 +1,4 @@
 import sys
-import os
 from pathlib import Path
 
 # Adjust sys.path to include the project root if this script is run directly
@@ -10,9 +9,12 @@ if str(project_root) not in sys.path:
 
 try:
     from backend.component_registry import ComponentRegistry
-    from shared_types.component_manifest import ComponentManifest # For type hinting
+    # For type hinting
 except ImportError as e:
-    print(f"Error importing backend modules: {e}. Make sure you are running this script from the project root or your PYTHONPATH is set correctly.")
+    print(
+        f"Error importing backend modules: {e}. Make sure you are running this "
+        f"script from the project root or your PYTHONPATH is set correctly."
+    )
     sys.exit(1)
 
 def initialize_backend_components():
@@ -36,17 +38,21 @@ def initialize_backend_components():
         print(f"Found {len(registry.manifests)} component(s):")
         for name, manifest in registry.manifests.items():
             print(f"  - {name} (Version: {manifest['version']})")
-            # In a more advanced system, you might load the backend module for each component here.
-            # For example, by looking for a 'backend.py' in the component's directory
-            # and dynamically importing it.
+            # In a more advanced system, you might load the backend module for
+            # each component here.
+            # For example, by looking for a 'backend.py' in the component's
+            # directory and dynamically importing it.
 
     # Example: Get a specific component's manifest
     chat_manifest = registry.get_component_manifest("AI Chat Interface")
     if chat_manifest:
-        print(f"Successfully retrieved manifest for 'AI Chat Interface': {chat_manifest['description']}")
-        # Here you could potentially instantiate or prepare the AI Chat Interface backend
-        # if it were designed to be dynamically loaded by this main.py script.
-        # For now, server.py handles its instantiation directly.
+        print(
+            f"Successfully retrieved manifest for 'AI Chat Interface': "
+            f"{chat_manifest['description']}"
+        )
+        # Here you could potentially instantiate or prepare the AI Chat Interface
+        # backend if it were designed to be dynamically loaded by this main.py
+        # script. For now, server.py handles its instantiation directly.
 
     print("Backend component initialization process complete.")
     return registry

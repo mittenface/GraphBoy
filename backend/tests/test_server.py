@@ -3,11 +3,10 @@ import pytest_asyncio
 import asyncio
 import json
 import websockets
-from unittest.mock import MagicMock, AsyncMock, patch, call
+from unittest.mock import MagicMock, AsyncMock, patch
 
 from backend.server import (
     WS_PORT,
-    websocket_handler,
     setup_and_start_servers,
     component_registry_instance as global_component_registry,
     event_bus_instance as global_event_bus_instance,
@@ -47,10 +46,18 @@ async def test_server():
                 print(f"Server task completed with exception: {exc}")
                 raise RuntimeError(f"Server task failed during startup: {exc}") from exc
             else:
-                print("Server task completed without error but server did not start (no exception).")
-                raise RuntimeError("Server task finished early without error, but server likely did not start.")
+                print(
+                    "Server task completed without error but server did not start (no exception)."
+                )
+                raise RuntimeError(
+                    "Server task finished early without error, "
+                    "but server likely did not start."
+                )
         except asyncio.InvalidStateError:
-            print("Server task is done but in invalid state to get exception (should not happen).")
+            print(
+                "Server task is done but in invalid state to get exception "
+                "(should not happen)."
+            )
             raise RuntimeError("Server task done but in invalid state.")
 
     uri = f"ws://localhost:{WS_PORT}/"
@@ -63,12 +70,20 @@ async def test_server():
             async with websockets.connect(uri) as temp_ws:
                 await temp_ws.ping()
                 up = True
-                print(f"Successfully connected and pinged server at {uri} on attempt {i+1}")
+                print(
+                    f"Successfully connected and pinged server at {uri} on attempt {i+1}"
+                )
                 break
-        except (ConnectionRefusedError, websockets.exceptions.InvalidStatusCode) as e:
-            print(f"Connection attempt {i+1} failed (ConnectionRefused/InvalidStatusCode): {e}")
+        except (ConnectionRefusedError,
+                websockets.exceptions.InvalidStatusCode) as e:
+            print(
+                f"Connection attempt {i+1} failed "
+                f"(ConnectionRefused/InvalidStatusCode): {e}"
+            )
             if server_task.done():
-                print("Server task unexpectedly completed during connection attempts.")
+                print(
+                    "Server task unexpectedly completed during connection attempts."
+                )
                 try:
                     exc = server_task.exception()
                     if exc: print(f"Server task exception: {exc}")
@@ -113,12 +128,17 @@ async def test_server():
             except asyncio.CancelledError:
                 print("Server task successfully cancelled (post-session).")
             except Exception as e:
-                print(f"Exception while awaiting cancelled server task (post-session): {e}")
+                print(
+                    "Exception while awaiting cancelled server task (post-session): {e}"
+                )
         elif server_task and server_task.done():
             print("Server task was already done post-session.")
         
         # Final cleanup of globals after all tests in session are done
-        print("Clearing global component registry and event bus in test_server fixture finally block (session scope).")
+        print(
+            "Clearing global component registry and event bus in "
+            "test_server fixture finally block (session scope)."
+        )
         global_component_registry.clear()
         global_event_bus_instance.clear()
         global_active_connections.clear()
@@ -141,17 +161,20 @@ class MockComponent:
 @pytest.fixture(autouse=True)
 def clean_global_state():
     """Clears global states before each test."""
-    # Note: For session-scoped server, this cleans for each test but server runs once.
-    # This is good for ensuring test isolation for global dictionaries like active_connections.
+    # Note: For session-scoped server, this cleans for each test but server
+    # runs once. This is good for ensuring test isolation for global
+    # dictionaries like active_connections.
     global_component_registry.clear() # Clears manifests, instances, port_details
     global_event_bus_instance.clear() # Clears subscribers
     global_active_connections.clear() # Clears active connections
     
-    # Re-register AIChatInterface as it's done in server.py's setup_and_start_servers
-    # This ensures it's available for tests that might expect it.
-    # This is a simplified version of what's in server.py's setup_and_start_servers
+    # Re-register AIChatInterface as it's done in server.py's
+    # setup_and_start_servers. This ensures it's available for tests that might
+    # expect it. This is a simplified version of what's in
+    # server.py's setup_and_start_servers
     component_id = "AIChatInterface" 
-    # Check if it's already registered by the server fixture to avoid issues, though clear() should remove it
+    # Check if it's already registered by the server fixture to avoid issues,
+    # though clear() should remove it
     if not global_component_registry.get_component_instance(component_id):
         inst = AIChatInterfaceBackend(
             component_id=component_id,
@@ -185,14 +208,25 @@ class TestConnectionLogic:
             "targetComponentId": "target_comp", "targetPortName": "input1"
         }
         
-        monkeypatch.setattr(global_component_registry, 'get_port_details', MagicMock(side_effect=[
-            {"name": "output1", "type": "output", "data_type": "text"},
-            {"name": "input1", "type": "input", "data_type": "text"}
-        ]))
+        monkeypatch.setattr(
+            global_component_registry,
+            'get_port_details',
+            MagicMock(side_effect=[
+                {"name": "output1", "type": "output", "data_type": "text"},
+                {"name": "input1", "type": "input", "data_type": "text"}
+            ])
+        )
         # Ensure target_instance is found after port validation
-        monkeypatch.setattr(global_component_registry, 'get_component_instance', MagicMock(side_effect=lambda comp_id: target_comp if comp_id == "target_comp" else source_comp if comp_id == "source_comp" else None ))
+        monkeypatch.setattr(
+            global_component_registry,
+            'get_component_instance',
+            MagicMock(side_effect=lambda comp_id: target_comp
+                      if comp_id == "target_comp" else source_comp
+                      if comp_id == "source_comp" else None)
+        )
 
-        with patch.object(global_event_bus_instance, 'subscribe', wraps=global_event_bus_instance.subscribe) as mock_subscribe:
+        with patch.object(global_event_bus_instance, 'subscribe',
+                          wraps=global_event_bus_instance.subscribe) as mock_subscribe:
             result = await handle_connection_create(conn_params)
 
         assert result.get("status") == "success", f"Connection failed: {result.get('error')}"
@@ -200,7 +234,8 @@ class TestConnectionLogic:
         conn_details = global_active_connections["conn1"]
         assert conn_details["event_name"] == _get_event_name("source_comp", "output1")
         assert callable(conn_details["callback"])
-        mock_subscribe.assert_called_once_with(conn_details["event_name"], conn_details["callback"])
+        mock_subscribe.assert_called_once_with(conn_details["event_name"],
+                                               conn_details["callback"])
 
         test_data = {"message": "hello world"}
         send_component_output("source_comp", "output1", test_data)
@@ -222,11 +257,21 @@ class TestConnectionLogic:
             "sourceComponentId": "source_comp_del", "sourcePortName": "output_del",
             "targetComponentId": "target_comp_del", "targetPortName": "input_del"
         }
-        monkeypatch.setattr(global_component_registry, 'get_port_details', MagicMock(side_effect=[
-            {"name": "output_del", "type": "output", "data_type": "any"}, 
-            {"name": "input_del", "type": "input", "data_type": "any"}
-        ]))
-        monkeypatch.setattr(global_component_registry, 'get_component_instance', MagicMock(side_effect=lambda comp_id: target_comp if comp_id == "target_comp_del" else source_comp if comp_id == "source_comp_del" else None))
+        monkeypatch.setattr(
+            global_component_registry,
+            'get_port_details',
+            MagicMock(side_effect=[
+                {"name": "output_del", "type": "output", "data_type": "any"},
+                {"name": "input_del", "type": "input", "data_type": "any"}
+            ])
+        )
+        monkeypatch.setattr(
+            global_component_registry,
+            'get_component_instance',
+            MagicMock(side_effect=lambda comp_id: target_comp
+                      if comp_id == "target_comp_del" else source_comp
+                      if comp_id == "source_comp_del" else None)
+        )
 
         await handle_connection_create(conn_params)
 
@@ -239,13 +284,15 @@ class TestConnectionLogic:
         target_comp.process_input.assert_awaited_once_with("input_del", test_data_before)
         target_comp.process_input.reset_mock()
 
-        with patch.object(global_event_bus_instance, 'unsubscribe', wraps=global_event_bus_instance.unsubscribe) as mock_unsubscribe:
+        with patch.object(global_event_bus_instance, 'unsubscribe',
+                          wraps=global_event_bus_instance.unsubscribe) as mock_unsubscribe:
             del_result = await handle_connection_delete({"connectionId": "conn2"})
 
         assert del_result.get("status") == "success"
         assert "conn2" not in global_active_connections
         expected_event_name = _get_event_name("source_comp_del", "output_del")
-        assert any(call_args[0][0] == expected_event_name for call_args in mock_unsubscribe.call_args_list)
+        assert any(call_args[0][0] == expected_event_name
+                   for call_args in mock_unsubscribe.call_args_list)
 
         test_data_after = {"signal": "off"}
         send_component_output("source_comp_del", "output_del", test_data_after)
@@ -262,11 +309,16 @@ class TestConnectionLogic:
             "targetComponentId": "non_existent_target", "targetPortName": "input_nf"
         }
         
-        monkeypatch.setattr(global_component_registry, 'get_port_details', MagicMock(side_effect=[
-            {"name": "output_nf", "type": "output", "data_type": "any"},
-            None, 
-        ]))
-        monkeypatch.setattr(global_component_registry, 'get_component_instance', MagicMock(return_value=None))
+        monkeypatch.setattr(
+            global_component_registry,
+            'get_port_details',
+            MagicMock(side_effect=[
+                {"name": "output_nf", "type": "output", "data_type": "any"},
+                None,
+            ])
+        )
+        monkeypatch.setattr(global_component_registry, 'get_component_instance',
+                            MagicMock(return_value=None))
         
         result = await handle_connection_create(conn_params)
         assert result.get("error") is not None
@@ -275,11 +327,19 @@ class TestConnectionLogic:
         assert "conn3" not in global_active_connections
 
     async def test_handle_connection_create_valid(self, monkeypatch):
-        monkeypatch.setattr(global_component_registry, 'get_port_details', MagicMock(side_effect=[
-            {"name": "src_port", "type": "output", "data_type": "text"},
-            {"name": "tgt_port", "type": "input", "data_type": "text"}
-        ]))
-        monkeypatch.setattr(global_component_registry, 'get_component_instance', MagicMock(return_value=MockComponent("target_comp_valid")))
+        monkeypatch.setattr(
+            global_component_registry,
+            'get_port_details',
+            MagicMock(side_effect=[
+                {"name": "src_port", "type": "output", "data_type": "text"},
+                {"name": "tgt_port", "type": "input", "data_type": "text"}
+            ])
+        )
+        monkeypatch.setattr(
+            global_component_registry,
+            'get_component_instance',
+            MagicMock(return_value=MockComponent("target_comp_valid"))
+        )
         mock_subscribe = MagicMock() 
         monkeypatch.setattr(global_event_bus_instance, 'subscribe', mock_subscribe)
 
@@ -300,7 +360,9 @@ class TestConnectionLogic:
             {"name": "src_port", "type": "input", "data_type": "text"}, 
             {"name": "tgt_port", "type": "input", "data_type": "text"}
         ]))
-        params = {"connectionId": "conn_inv_src_type", "sourceComponentId": "s", "sourcePortName": "s_p", "targetComponentId": "t", "targetPortName": "t_p"}
+        params = {"connectionId": "conn_inv_src_type", "sourceComponentId": "s",
+                  "sourcePortName": "s_p", "targetComponentId": "t",
+                  "targetPortName": "t_p"}
         result = await handle_connection_create(params)
         assert result.get("error") is not None
         assert result["error"]["code"] == -32003
@@ -311,7 +373,9 @@ class TestConnectionLogic:
             {"name": "src_port", "type": "output", "data_type": "text"},
             {"name": "tgt_port", "type": "output", "data_type": "text"}
         ]))
-        params = {"connectionId": "conn_inv_tgt_type", "sourceComponentId": "s", "sourcePortName": "s_p", "targetComponentId": "t", "targetPortName": "t_p"}
+        params = {"connectionId": "conn_inv_tgt_type", "sourceComponentId": "s",
+                  "sourcePortName": "s_p", "targetComponentId": "t",
+                  "targetPortName": "t_p"}
         result = await handle_connection_create(params)
         assert result.get("error") is not None
         assert result["error"]["code"] == -32003
@@ -322,7 +386,9 @@ class TestConnectionLogic:
             {"name": "src_port", "type": "output", "data_type": "text"},
             {"name": "tgt_port", "type": "input", "data_type": "number"}
         ]))
-        params = {"connectionId": "conn_mismatch_type", "sourceComponentId": "s", "sourcePortName": "s_p", "targetComponentId": "t", "targetPortName": "t_p"}
+        params = {"connectionId": "conn_mismatch_type", "sourceComponentId": "s",
+                  "sourcePortName": "s_p", "targetComponentId": "t",
+                  "targetPortName": "t_p"}
         result = await handle_connection_create(params)
         assert result.get("error") is not None
         assert result["error"]["code"] == -32003
@@ -333,7 +399,9 @@ class TestConnectionLogic:
             None, 
             {"name": "tgt_port", "type": "input", "data_type": "text"}
         ]))
-        params = {"connectionId": "conn_src_not_found", "sourceComponentId": "s", "sourcePortName": "s_p", "targetComponentId": "t", "targetPortName": "t_p"}
+        params = {"connectionId": "conn_src_not_found", "sourceComponentId": "s",
+                  "sourcePortName": "s_p", "targetComponentId": "t",
+                  "targetPortName": "t_p"}
         result = await handle_connection_create(params)
         assert result.get("error") is not None
         assert result["error"]["code"] == -32004
@@ -344,7 +412,9 @@ class TestConnectionLogic:
             {"name": "src_port", "type": "output", "data_type": "text"},
             None 
         ]))
-        params = {"connectionId": "conn_tgt_not_found", "sourceComponentId": "s", "sourcePortName": "s_p", "targetComponentId": "t", "targetPortName": "t_p"}
+        params = {"connectionId": "conn_tgt_not_found", "sourceComponentId": "s",
+                  "sourcePortName": "s_p", "targetComponentId": "t",
+                  "targetPortName": "t_p"}
         result = await handle_connection_create(params)
         assert result.get("error") is not None
         assert result["error"]["code"] == -32004
@@ -372,21 +442,25 @@ class TestConnectionLogic:
 async def test_component_update_input_routes_to_chat_component(test_server, monkeypatch):
     uri = test_server
     request_id = "comp-route-test-1"
-    component_name = "AIChatInterface" # This is the one registered by test_server/setup_and_start_servers
+    # This is the one registered by test_server/setup_and_start_servers
+    component_name = "AIChatInterface"
     test_inputs = {"userInput": "Testing routing"}
 
     # We need to mock the *instance* that the server uses for "AIChatInterface"
-    # The clean_global_state fixture now re-registers a real AIChatInterfaceBackend.
-    # So we patch its update method, or get that instance and patch it.
+    # The clean_global_state fixture now re-registers a real
+    # AIChatInterfaceBackend. So we patch its update method, or get that
+    # instance and patch it.
     actual_instance = global_component_registry.get_component_instance(component_name)
     assert actual_instance is not None, "AIChatInterface should be registered by clean_global_state"
     
     # Patch the 'update' method of the actual instance
-    with patch.object(actual_instance, 'update', new_callable=AsyncMock) as mock_update:
+    with patch.object(actual_instance, 'update',
+                      new_callable=AsyncMock) as mock_update:
         mock_update.return_value = {"status": "mock update called"}
 
         request = {"jsonrpc": "2.0", "method": "component.updateInput", 
-                   "params": {"componentName": component_name, "inputs": test_inputs}, 
+                   "params": {"componentName": component_name,
+                              "inputs": test_inputs},
                    "id": request_id}
         response = await send_json_rpc_request(uri, request)
 
@@ -435,7 +509,8 @@ async def test_send_component_output_websocket_success():
             expected_message = json.dumps({
                 "jsonrpc": "2.0",
                 "method": "component.emitOutput",
-                "params": {"componentId": test_component_id, "outputName": output_name, "data": data}
+                "params": {"componentId": test_component_id,
+                           "outputName": output_name, "data": data}
             })
             mock_ws.send.assert_called_once_with(expected_message)
             mock_event_publish.assert_called_once()
@@ -457,19 +532,23 @@ async def test_websocket_handler_integration_emits_output_and_cleans_up(test_ser
     try:
         async with websockets.connect(uri) as ws:
             client_ws = ws
-            # Associate this client with AIChatInterface for server to know where to send emitOutput
-            # This can be done via a special message or by path, here we assume path or prior message.
-            # For this test, the server's `setup_and_start_servers` already registers "AIChatInterface".
-            # We need to ensure this WS connection becomes associated with it.
-            # A simple way is to send an initial message that includes componentName.
+            # Associate this client with AIChatInterface for server to know
+            # where to send emitOutput. This can be done via a special message
+            # or by path, here we assume path or prior message.
+            # For this test, the server's `setup_and_start_servers` already
+            # registers "AIChatInterface". We need to ensure this WS connection
+            # becomes associated with it. A simple way is to send an initial
+            # message that includes componentName.
             # The test_component_update_input_routes_to_chat_component does this.
-            # Here, we'll rely on the server's setup_and_start_servers registering the component
-            # and the component's backend logic calling send_component_output correctly.
+            # Here, we'll rely on the server's setup_and_start_servers
+            # registering the component and the component's backend logic
+            # calling send_component_output correctly.
             
             # Send a message that will trigger an output from AIChatInterface
             update_req = {
                 "jsonrpc": "2.0", "method": "component.updateInput",
-                "params": {"componentName": test_component_id, "inputs": {"userInput": "Test emit", "temperature": 0.1}},
+                "params": {"componentName": test_component_id,
+                           "inputs": {"userInput": "Test emit", "temperature": 0.1}},
                 "id": "integ-update-1"
             }
             await ws.send(json.dumps(update_req))
@@ -488,11 +567,14 @@ async def test_websocket_handler_integration_emits_output_and_cleans_up(test_ser
             assert emit_msg.get("method") == "component.emitOutput"
             assert emit_msg["params"].get("componentId") == test_component_id
             # Check for one of the possible outputs
-            assert emit_msg["params"].get("outputName") in ["responseText", "responseStream", "error"], f"Unexpected output name: {emit_msg_str}"
+            assert emit_msg["params"].get("outputName") in [
+                "responseText", "responseStream", "error"
+            ], f"Unexpected output name: {emit_msg_str}"
 
         # After disconnect
         await asyncio.sleep(0.1) 
-        assert test_component_id not in active_component_sockets # Check it's removed from active_component_sockets
+        # Check it's removed from active_component_sockets
+        assert test_component_id not in active_component_sockets
 
     except asyncio.TimeoutError: pytest.fail("Timeout waiting for WS message.")
     except Exception as e:
@@ -504,9 +586,13 @@ if hasattr(global_event_bus_instance, '_subscribers') and not hasattr(global_eve
     def eb_clear(): global_event_bus_instance._subscribers.clear()
     global_event_bus_instance.clear = eb_clear
 
-if hasattr(global_component_registry, 'manifests') and not hasattr(global_component_registry, 'clear'): # Check if it's the actual instance
+# Check if it's the actual instance
+if (hasattr(global_component_registry, 'manifests') and
+        not hasattr(global_component_registry, 'clear')):
     def cr_clear(): 
         global_component_registry.manifests.clear()
-        if hasattr(global_component_registry, 'instances'): global_component_registry.instances.clear()
-        if hasattr(global_component_registry, 'port_details'): global_component_registry.port_details.clear()
+        if hasattr(global_component_registry, 'instances'):
+            global_component_registry.instances.clear()
+        if hasattr(global_component_registry, 'port_details'):
+            global_component_registry.port_details.clear()
     global_component_registry.clear = cr_clear
