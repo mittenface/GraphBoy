@@ -34,6 +34,7 @@ class ComponentRegistry:
     def __init__(self, event_bus: 'EventBus | None' = None) -> None: # Modified
         self.manifests: Dict[str, ComponentManifest] = {}
         self.instances: Dict[str, Any] = {}
+        self.port_details: Dict[str, Dict[str, Dict[str, str]]] = {} # Added for port details
         self.event_bus = event_bus # Added
         logger.info(f"ComponentRegistry initialized {'with' if event_bus else 'without'} EventBus.") # Added logging
 
@@ -62,6 +63,28 @@ class ComponentRegistry:
                         self.manifests[component_name] = manifest
                         logger.debug(f"Successfully loaded manifest for component: {component_name} from {manifest_path}") # Changed to logger
 
+                        # Parse and store port details
+                        self.port_details[component_name] = {}
+                        if "nodes" in manifest_data:
+                            if "inputs" in manifest_data["nodes"]:
+                                for port in manifest_data["nodes"]["inputs"]:
+                                    port_name = port.get("name")
+                                    if port_name:
+                                        self.port_details[component_name][port_name] = {
+                                            "name": port_name,
+                                            "type": "input",
+                                            "data_type": port.get("type", "unknown")
+                                        }
+                            if "outputs" in manifest_data["nodes"]:
+                                for port in manifest_data["nodes"]["outputs"]:
+                                    port_name = port.get("name")
+                                    if port_name:
+                                        self.port_details[component_name][port_name] = {
+                                            "name": port_name,
+                                            "type": "output",
+                                            "data_type": port.get("type", "unknown")
+                                        }
+
                         # Dynamically load and instantiate component backend
                         try:
                             module_name = f"components.{item.name}.backend" # Assuming item.name is the component's directory name
@@ -70,7 +93,10 @@ class ComponentRegistry:
                             module = importlib.import_module(module_name)
                             component_class = getattr(module, class_name)
 
-                            init_kwargs = {}
+                            init_kwargs = {
+                                "component_id": component_name,  # Use component_name as component_id
+                                "send_component_output_func": lambda _id, _port, _data: logger.debug(f"Placeholder send_component_output_func called for {_id} on port {_port} with data {_data}")
+                            }
                             if self.event_bus:
                                 init_kwargs["event_bus"] = self.event_bus
 
@@ -98,6 +124,20 @@ class ComponentRegistry:
                 else:
                     logger.debug(f"No manifest.json found in component directory: {item}, skipping.") # Added logging
         logger.info(f"Component discovery complete. Found {len(self.manifests)} manifests and instantiated {len(self.instances)} components.") # Changed to logger
+
+    def get_port_details(self, component_name: str, port_name: str) -> Dict[str, str] | None:
+        """
+        Retrieves the details of a specific port for a given component.
+
+        Args:
+            component_name: The name of the component.
+            port_name: The name of the port.
+
+        Returns:
+            A dictionary containing the port details (name, type, data_type)
+            if found, otherwise None.
+        """
+        return self.port_details.get(component_name, {}).get(port_name)
 
     def get_component_manifest(self, component_name: str) -> ComponentManifest | None:
         """

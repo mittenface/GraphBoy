@@ -27,10 +27,17 @@ active_component_sockets: dict[str, websockets.WebSocketServerProtocol] = {}  # 
 # Dictionary to store active connections between components
 active_connections: dict[str, dict] = {}
 
-def send_component_output(component_id: str, output_name: str, data: any) -> asyncio.Task:
+def send_component_output(component_id: str, output_name: str, data: any) -> None: # Return type changed, returns None if only publishing
     """
-    Sends a component.emitOutput message to the client via WebSocket.
+    Sends a component.emitOutput message to the client via WebSocket
+    and publishes an event to the event bus for inter-component communication.
     """
+    # Publish event to EventBus for inter-component communication
+    event_name = _get_event_name(component_id, output_name)
+    logger.info(f"Publishing event: {event_name} with data: {data}")
+    asyncio.create_task(event_bus_instance.publish(event_name, data=data)) # Fire-and-forget
+
+    # Send message to WebSocket client (original functionality)
     websocket = active_component_sockets.get(component_id)
     if websocket:
         message = {
@@ -42,13 +49,15 @@ def send_component_output(component_id: str, output_name: str, data: any) -> asy
                 "data": data
             }
         }
-        return asyncio.create_task(_send_message(websocket, message))
+        # Create a task for sending the WebSocket message, but don't return it directly
+        # if the function's primary purpose is now broader.
+        asyncio.create_task(_send_message(websocket, message))
+        # If the caller specifically needs to await WebSocket send, this design might need adjustment,
+        # but for now, we assume fire-and-forget for both.
     else:
-        logger.warning(f"No WebSocket connection found for component_id: {component_id} when trying to emit output: {output_name}")
-        # Ensure it returns an awaitable, even if it's a dummy one.
-        async def dummy_task():
-            pass # Does nothing, just ensures an awaitable is returned.
-        return asyncio.create_task(dummy_task())
+        logger.warning(f"No WebSocket connection found for component_id: {component_id} when trying to emit output via WebSocket: {output_name}")
+    # This function no longer exclusively returns the WebSocket send task.
+    # Consider if callers relied on this return value. For now, returning None.
 
 async def _send_message(websocket, message: dict):
     try:
@@ -81,48 +90,67 @@ async def handle_connection_create(params: dict) -> dict:
 
     logger.info(f"Attempting to create connection: {connection_id} from {source_component_id}:{source_port_name} to {target_component_id}:{target_port_name}")
 
-    # --- Connection Validation Start ---
-    source_manifest = component_registry_instance.get_component_manifest(source_component_id)
-    target_manifest = component_registry_instance.get_component_manifest(target_component_id)
+    # Validate parameters
+    if not all([connection_id, source_component_id, source_port_name, target_component_id, target_port_name]):
+        logger.error("connection.create failed: Missing one or more required parameters.")
+        return {"error": {"code": -32602, "message": "Invalid params: Missing required parameters"}}
 
-    source_port_type = None
-    target_port_type = None
+    # Fetch port details
+    source_port_details = component_registry_instance.get_port_details(source_component_id, source_port_name)
+    target_port_details = component_registry_instance.get_port_details(target_component_id, target_port_name)
 
-    if not source_manifest:
-        logger.warning(f"Connection validation: Source component manifest not found for {source_component_id}. Allowing connection.")
-    else:
-        found_source_port = False
-        for port in source_manifest.get('nodes', {}).get('outputs', []):
-            if port.get('name') == source_port_name:
-                source_port_type = port.get('type')
-                found_source_port = True
-                break
-        if not found_source_port:
-            logger.warning(f"Connection validation: Source port {source_port_name} not found in manifest for {source_component_id}. Allowing connection.")
+    if not source_port_details:
+        logger.error(f"connection.create failed: Source port details not found for {source_component_id}:{source_port_name}")
+        return {"error": {"code": -32004, "message": f"Port details not found for source port {source_component_id}:{source_port_name}."}}
+    if not target_port_details:
+        logger.error(f"connection.create failed: Target port details not found for {target_component_id}:{target_port_name}")
+        return {"error": {"code": -32004, "message": f"Port details not found for target port {target_component_id}:{target_port_name}."}}
 
-    if not target_manifest:
-        logger.warning(f"Connection validation: Target component manifest not found for {target_component_id}. Allowing connection.")
-    else:
-        found_target_port = False
-        for port in target_manifest.get('nodes', {}).get('inputs', []):
-            if port.get('name') == target_port_name:
-                target_port_type = port.get('type')
-                found_target_port = True
-                break
-        if not found_target_port:
-            logger.warning(f"Connection validation: Target port {target_port_name} not found in manifest for {target_component_id}. Allowing connection.")
+    # Validate port types
+    if source_port_details.get("type") != "output":
+        logger.error(f"connection.create failed: Source port {source_component_id}:{source_port_name} is not an output port.")
+        return {"error": {"code": -32003, "message": "Invalid connection: Source port must be an output port."}}
+    if target_port_details.get("type") != "input":
+        logger.error(f"connection.create failed: Target port {target_component_id}:{target_port_name} is not an input port.")
+        return {"error": {"code": -32003, "message": "Invalid connection: Target port must be an input port."}}
 
-    # Validation Logic
-    if source_port_type and target_port_type: # Only validate if both types are known
-        if source_port_type == "text" and target_port_type == "text":
-            logger.info(f"Connection validation passed: text to text ({source_component_id}:{source_port_name} -> {target_component_id}:{target_port_name})")
-        elif source_port_type == "output" and target_port_type == "output":
-            logger.error(f"Connection validation failed: Output-to-output connection attempt from {source_component_id}:{source_port_name} to {target_component_id}:{target_port_name}")
-            return {"error": {"code": -32002, "message": "Connection validation failed: Output-to-output connections are not allowed"}}
-        # Allow other combinations for now
-        else:
-            logger.info(f"Connection validation passed (other types): {source_port_type} to {target_port_type} ({source_component_id}:{source_port_name} -> {target_component_id}:{target_port_name})")
-    # --- Connection Validation End ---
+    # Validate data types
+    if source_port_details.get("data_type") != target_port_details.get("data_type"):
+        logger.error(f"connection.create failed: Data type mismatch between {source_component_id}:{source_port_name} ({source_port_details.get('data_type')}) and {target_component_id}:{target_port_name} ({target_port_details.get('data_type')}).")
+        return {"error": {"code": -32003, "message": f"Invalid connection: Data type mismatch. Source is '{source_port_details.get('data_type')}', Target is '{target_port_details.get('data_type')}'."}}
+
+    # Check target instance (already part of original logic, kept for clarity though redundant if port lookups succeed)
+    target_instance = component_registry_instance.get_component_instance(target_component_id)
+    if not target_instance: # This check might be redundant if get_port_details implies component existence.
+        logger.error(f"connection.create failed: Target component '{target_component_id}' not found (post port validation).")
+        return {"error": {"code": -32001, "message": f"Target component '{target_component_id}' not found."}}
+
+    event_name = _get_event_name(source_component_id, source_port_name)
+
+    async def on_data_received(data: any):
+        logger.info(f"Connection {connection_id}: Data received on event '{event_name}' for {target_component_id}:{target_port_name}")
+        try:
+            # Retrieve target instance again, or ensure it's properly closed over.
+            # For simplicity, retrieving again if necessary, though closure should work.
+            current_target_instance = component_registry_instance.get_component_instance(target_component_id)
+            if not current_target_instance:
+                logger.error(f"Data received for connection {connection_id}, but target component '{target_component_id}' no longer found.")
+                return
+
+            if hasattr(current_target_instance, 'process_input'):
+                await current_target_instance.process_input(target_port_name, data)
+                logger.debug(f"Data processed by {target_component_id} via input port {target_port_name}")
+            else:
+                logger.error(f"Target component '{target_component_id}' does not have a process_input method.")
+        except Exception as e:
+            logger.error(f"Error processing data for connection {connection_id} by {target_component_id}: {e}", exc_info=True)
+
+    try:
+        await event_bus_instance.subscribe(event_name, on_data_received)
+        logger.info(f"Successfully subscribed to event '{event_name}' for connection {connection_id}")
+    except Exception as e:
+        logger.error(f"Failed to subscribe to event '{event_name}' for connection {connection_id}: {e}", exc_info=True)
+        return {"error": {"code": -32002, "message": f"Failed to subscribe to event: {e}"}}
 
     details = {
         "connectionId": connection_id,
@@ -130,11 +158,17 @@ async def handle_connection_create(params: dict) -> dict:
         "sourcePortName": source_port_name,
         "targetComponentId": target_component_id,
         "targetPortName": target_port_name,
-        "status": "active"
+        "status": "active",
+        "event_name": event_name,
+        "callback": on_data_received  # Store the actual callback
     }
     active_connections[connection_id] = details
     logger.info(f"Connection {connection_id} created and stored: {details}")
     return {"status": "success", "message": "Connection created successfully", "connectionId": connection_id}
+
+def _get_event_name(source_component_id: str, source_port_name: str) -> str:
+    """Helper function to define the event naming convention."""
+    return f"component_output::{source_component_id}::{source_port_name}"
 
 async def handle_connection_delete(params: dict) -> dict:
     """
@@ -148,7 +182,19 @@ async def handle_connection_delete(params: dict) -> dict:
 
     logger.info(f"Attempting to delete connection: {connection_id}")
 
-    if connection_id in active_connections:
+    connection_details = active_connections.get(connection_id)
+    if connection_details:
+        event_name = connection_details.get("event_name")
+        callback = connection_details.get("callback")
+
+        if event_name and callback:
+            try:
+                await event_bus_instance.unsubscribe(event_name, callback)
+                logger.info(f"Successfully unsubscribed from event '{event_name}' for connection {connection_id}")
+            except Exception as e:
+                logger.error(f"Error unsubscribing from event '{event_name}' for connection {connection_id}: {e}", exc_info=True)
+                # Optionally, still proceed to delete the connection from active_connections or handle error differently
+
         del active_connections[connection_id]
         logger.info(f"Connection {connection_id} deleted successfully.")
         return {"status": "success", "message": "Connection deleted successfully", "connectionId": connection_id}

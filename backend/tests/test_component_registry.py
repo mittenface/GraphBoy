@@ -58,6 +58,40 @@ class TestComponentRegistry(unittest.TestCase):
         manifest = self.registry.get_component_manifest("NonExistentComponent")
         self.assertIsNone(manifest, "Should return None for a non-existent component.")
 
+    def test_get_port_details_existing_component_input_port(self):
+        """Test retrieving an existing input port for AI Chat Interface."""
+        port_details = self.registry.get_port_details("AI Chat Interface", "userInput")
+        self.assertIsNotNone(port_details, "Should retrieve port details for AI Chat Interface's userInput.")
+        if port_details: # For type checker
+            self.assertEqual(port_details['name'], "userInput")
+            self.assertEqual(port_details['type'], "input")
+            self.assertEqual(port_details['data_type'], "text")
+
+    def test_get_port_details_existing_component_output_port(self):
+        """Test retrieving an existing output port for AI Chat Interface."""
+        port_details = self.registry.get_port_details("AI Chat Interface", "responseText")
+        self.assertIsNotNone(port_details, "Should retrieve port details for AI Chat Interface's responseText.")
+        if port_details: # For type checker
+            self.assertEqual(port_details['name'], "responseText")
+            self.assertEqual(port_details['type'], "output")
+            self.assertEqual(port_details['data_type'], "text")
+
+    def test_get_port_details_non_existent_port(self):
+        """Test retrieving a non-existent port for an existing component."""
+        port_details = self.registry.get_port_details("AI Chat Interface", "nonExistentPort")
+        self.assertIsNone(port_details, "Should return None for a non-existent port.")
+
+    def test_get_port_details_non_existent_component(self):
+        """Test retrieving a port for a non-existent component."""
+        port_details = self.registry.get_port_details("NonExistentComponent", "anyPort")
+        self.assertIsNone(port_details, "Should return None for a non-existent component.")
+
+    def test_get_port_details_component_with_no_nodes(self):
+        """Test retrieving a port for a component with no 'nodes' in its manifest."""
+        # Dummy Component's manifest does not have 'nodes'.
+        port_details = self.registry.get_port_details("Dummy Component", "anyPort")
+        self.assertIsNone(port_details, "Should return None for a component with no port definitions.")
+
 if __name__ == '__main__':
     # This allows running the tests directly from this file, e.g., python backend/tests/test_component_registry.py
     # For this to work, Python needs to be able to find 'backend' and 'shared_types'.
