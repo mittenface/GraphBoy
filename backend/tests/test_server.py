@@ -3,7 +3,7 @@ import pytest_asyncio
 import asyncio
 import json
 import websockets
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import MagicMock, AsyncMock, patch, call
 
 from backend.server import (
     WS_PORT,
@@ -194,7 +194,6 @@ class TestConnectionLogic:
                 {"name": "input1", "type": "input", "data_type": "text"}
             ])
         )
-        # Ensure target_instance is found after port validation
         monkeypatch.setattr(
             global_component_registry,
             'get_component_instance',
@@ -204,7 +203,9 @@ class TestConnectionLogic:
         )
 
         with patch.object(global_event_bus_instance, 'subscribe',
-                          wraps=global_event_bus_instance.subscribe) as mock_subscribe:
+                          wraps=global_event_bus_instance.subscribe) as mock_subscribe, \
+             patch.object(global_component_registry, 'add_connection_to_component',
+                          wraps=global_component_registry.add_connection_to_component) as mock_add_connection:
             result = await handle_connection_create(conn_params)
 
         assert result.get("status") == "success", f"Connection failed: {result.get('error')}"
@@ -214,6 +215,12 @@ class TestConnectionLogic:
         assert callable(conn_details["callback"])
         mock_subscribe.assert_called_once_with(conn_details["event_name"],
                                                conn_details["callback"])
+
+        mock_add_connection.assert_has_calls([
+            call(conn_params["sourceComponentId"], conn_params["connectionId"]),
+            call(conn_params["targetComponentId"], conn_params["connectionId"])
+        ], any_order=True)
+        assert mock_add_connection.call_count == 2
 
         test_data = {"message": "hello world"}
         send_component_output("source_comp", "output1", test_data)
@@ -230,8 +237,9 @@ class TestConnectionLogic:
         global_component_registry.register_component("source_comp_del", MockComponent, instance=source_comp)
         global_component_registry.register_component("target_comp_del", MockComponent, instance=target_comp)
 
+        conn_id = "conn2" # Defined for clarity
         conn_params = {
-            "connectionId": "conn2",
+            "connectionId": conn_id,
             "sourceComponentId": "source_comp_del", "sourcePortName": "output_del",
             "targetComponentId": "target_comp_del", "targetPortName": "input_del"
         }
@@ -251,7 +259,12 @@ class TestConnectionLogic:
                       if comp_id == "source_comp_del" else None)
         )
 
-        await handle_connection_create(conn_params)
+        # Create connection first
+        # For this test, we are focusing on deletion, so we assume creation and
+        # add_connection_to_component calls during creation are correct.
+        create_result = await handle_connection_create(conn_params)
+        assert create_result.get("status") == "success", f"Pre-test connection creation failed: {create_result.get('error')}"
+
 
         test_data_before = {"signal": "on"}
         send_component_output("source_comp_del", "output_del", test_data_before)
@@ -263,14 +276,23 @@ class TestConnectionLogic:
         target_comp.process_input.reset_mock()
 
         with patch.object(global_event_bus_instance, 'unsubscribe',
-                          wraps=global_event_bus_instance.unsubscribe) as mock_unsubscribe:
-            del_result = await handle_connection_delete({"connectionId": "conn2"})
+                          wraps=global_event_bus_instance.unsubscribe) as mock_unsubscribe, \
+             patch.object(global_component_registry, 'remove_connection_from_component',
+                          wraps=global_component_registry.remove_connection_from_component) as mock_remove_connection:
+            del_result = await handle_connection_delete({"connectionId": conn_id})
 
         assert del_result.get("status") == "success"
-        assert "conn2" not in global_active_connections
+        assert conn_id not in global_active_connections
         expected_event_name = _get_event_name("source_comp_del", "output_del")
+        # Check that unsubscribe was called for the correct event
         assert any(call_args[0][0] == expected_event_name
                    for call_args in mock_unsubscribe.call_args_list)
+
+        mock_remove_connection.assert_has_calls([
+            call(conn_params["sourceComponentId"], conn_params["connectionId"]),
+            call(conn_params["targetComponentId"], conn_params["connectionId"])
+        ], any_order=True)
+        assert mock_remove_connection.call_count == 2
 
         test_data_after = {"signal": "off"}
         send_component_output("source_comp_del", "output_del", test_data_after)

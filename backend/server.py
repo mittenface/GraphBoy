@@ -2,6 +2,8 @@ import asyncio
 import json
 import websockets
 import logging
+from typing import Dict
+from shared_types.connection import Connection
 import functools
 from backend.component_registry import ComponentRegistry
 from backend.event_bus import EventBus  # Added
@@ -32,7 +34,7 @@ client_connections: dict[websockets.WebSocketServerProtocol, str] = {}
 active_component_sockets: dict[str, websockets.WebSocketServerProtocol] = {}
 
 # Dictionary to store active connections between components
-active_connections: dict[str, dict] = {}
+active_connections: Dict[str, Connection] = {}
 
 # Return type changed, returns None if only publishing
 def send_component_output(component_id: str, output_name: str, data: any) -> None:
@@ -312,18 +314,21 @@ async def handle_connection_create(params: dict) -> dict:
         return {"error": {"code": -32002,
                           "message": f"Failed to subscribe to event: {e}"}}
 
-    details = {
-        "connectionId": connection_id,
-        "sourceComponentId": source_component_id,
-        "sourcePortName": source_port_name,
-        "targetComponentId": target_component_id,
-        "targetPortName": target_port_name,
+    details: Connection = {
+        "connection_id": connection_id,
+        "source_component_id": source_component_id,
+        "source_port_name": source_port_name,
+        "target_component_id": target_component_id,
+        "target_port_name": target_port_name,
         "status": "active",
         "event_name": event_name,
-        "callback": on_data_received  # Store the actual callback
+        "callback": on_data_received
     }
     active_connections[connection_id] = details
-    logger.info(f"Connection {connection_id} created and stored: {details}")
+    # Add connection to component registry
+    component_registry_instance.add_connection_to_component(source_component_id, connection_id)
+    component_registry_instance.add_connection_to_component(target_component_id, connection_id)
+    logger.info(f"Connection {connection_id} created, stored, and registered with components.")
     return {"status": "success",
             "message": "Connection created successfully",
             "connectionId": connection_id}
@@ -347,9 +352,13 @@ async def handle_connection_delete(params: dict) -> dict:
 
     connection_details = active_connections.get(connection_id)
     if connection_details:
-        event_name = connection_details.get("event_name")
-        callback = connection_details.get("callback")
+        source_component_id = connection_details["source_component_id"]
+        target_component_id = connection_details["target_component_id"]
+        event_name = connection_details["event_name"]
+        callback = connection_details["callback"]
 
+        # Ensure callback and event_name are not None before proceeding,
+        # though Connection type hint implies they exist.
         if event_name and callback:
             try:
                 # unsubscribe is not an async method
@@ -363,11 +372,14 @@ async def handle_connection_delete(params: dict) -> dict:
                     f"Error unsubscribing from event '{event_name}' "
                     f"for connection {connection_id}: {e}", exc_info=True
                 )
-                # Optionally, still proceed to delete the connection from
-                # active_connections or handle error differently
+                # Optionally, still proceed to delete the connection or handle error
+
+        # Remove connection from component registry
+        component_registry_instance.remove_connection_from_component(source_component_id, connection_id)
+        component_registry_instance.remove_connection_from_component(target_component_id, connection_id)
 
         del active_connections[connection_id]
-        logger.info(f"Connection {connection_id} deleted successfully.")
+        logger.info(f"Connection {connection_id} deleted, unsubscribed, and removed from components.")
         return {"status": "success",
                 "message": "Connection deleted successfully",
                 "connectionId": connection_id}

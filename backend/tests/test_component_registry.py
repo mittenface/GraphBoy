@@ -112,6 +112,76 @@ class TestComponentRegistry(unittest.TestCase):
             "Should return None for a component with no port definitions."
         )
 
+    def test_add_connection_to_component(self):
+        """Test adding connection IDs to components."""
+        self.registry.add_connection_to_component("compA", "conn1")
+        self.registry.add_connection_to_component("compA", "conn2")
+        self.registry.add_connection_to_component("compB", "conn3")
+
+        self.assertIn("compA", self.registry.component_connections)
+        self.assertEqual(self.registry.component_connections["compA"], ["conn1", "conn2"])
+        self.assertIn("compB", self.registry.component_connections)
+        self.assertEqual(self.registry.component_connections["compB"], ["conn3"])
+
+        # Test adding duplicate connection ID
+        self.registry.add_connection_to_component("compA", "conn1")
+        self.assertEqual(self.registry.component_connections["compA"], ["conn1", "conn2"],
+                         "Duplicate connection ID should not be added.")
+
+    def test_remove_connection_from_component(self):
+        """Test removing connection IDs from components."""
+        self.registry.add_connection_to_component("compA", "conn1")
+        self.registry.add_connection_to_component("compA", "conn2")
+        self.registry.add_connection_to_component("compB", "conn3")
+
+        # Remove existing connection
+        self.registry.remove_connection_from_component("compA", "conn1")
+        self.assertEqual(self.registry.component_connections["compA"], ["conn2"])
+
+        # Remove last connection for a component
+        self.registry.remove_connection_from_component("compA", "conn2")
+        self.assertNotIn("compA", self.registry.component_connections,
+                         "Component key should be removed if connection list is empty.")
+
+        # Test removing non-existent connection ID
+        self.registry.remove_connection_from_component("compB", "conn_nonexistent")
+        self.assertEqual(self.registry.component_connections["compB"], ["conn3"],
+                         "Attempting to remove non-existent connection ID should not alter the list.")
+
+        # Test removing from non-existent component
+        self.registry.remove_connection_from_component("comp_nonexistent", "conn3")
+        # No assertion needed other than no error, and compB is still there
+        self.assertIn("compB", self.registry.component_connections)
+
+
+    def test_get_connections_for_component(self):
+        """Test retrieving connection IDs for a component."""
+        self.registry.add_connection_to_component("compA", "conn1")
+        self.registry.add_connection_to_component("compA", "conn2")
+
+        connections_compA = self.registry.get_connections_for_component("compA")
+        self.assertEqual(sorted(connections_compA), sorted(["conn1", "conn2"]))
+
+        connections_compB = self.registry.get_connections_for_component("compB")
+        self.assertEqual(connections_compB, [],
+                         "Should return empty list for component with no connections.")
+
+        connections_nonexistent = self.registry.get_connections_for_component("comp_nonexistent")
+        self.assertEqual(connections_nonexistent, [],
+                         "Should return empty list for non-existent component.")
+
+    def test_clear_component_connections(self):
+        """Test that component_connections is cleared by registry.clear()."""
+        self.registry.add_connection_to_component("compA", "conn1")
+        self.registry.add_connection_to_component("compB", "conn2")
+
+        self.assertNotEqual(self.registry.component_connections, {})
+
+        self.registry.clear()
+        self.assertEqual(self.registry.component_connections, {},
+                         "component_connections should be empty after clear().")
+
+
 if __name__ == '__main__':
     # This allows running the tests directly from this file,
     # e.g., python backend/tests/test_component_registry.py
