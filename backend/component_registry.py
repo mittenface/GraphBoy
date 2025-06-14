@@ -181,3 +181,13 @@ class ComponentRegistry:
                 # Add other fields if your ComponentManifest type expects them
             }
         logger.info(f"Component '{name}' (Class: {component_class.__name__}) registered manually with instance {instance}.") # Changed to logger
+
+    def clear(self) -> None:
+        """
+        Clears all registered components, manifests, instances, and port details.
+        Useful for testing or resetting state.
+        """
+        self.manifests.clear()
+        self.instances.clear()
+        self.port_details.clear()
+        logger.info("ComponentRegistry cleared.")
