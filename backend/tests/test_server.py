@@ -27,7 +27,7 @@ async def send_json_rpc_request(uri, request_data):
         response = await ws.recv()
         return json.loads(response)
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture(scope="function") # Changed from session to function
 async def test_server():
     print("Attempting to start server in test_server fixture...")
     # Ensure globals are clean before server starts for a new session
@@ -36,104 +36,82 @@ async def test_server():
     global_event_bus_instance.clear()
     global_active_connections.clear()
     
+    ws_server = None # Define ws_server to ensure it's in scope for finally
     server_task = asyncio.create_task(setup_and_start_servers())
-    await asyncio.sleep(0.5) # Give the server a moment to start or fail
 
-    if server_task.done():
-        try:
-            exc = server_task.exception()
-            if exc:
-                print(f"Server task completed with exception: {exc}")
-                raise RuntimeError(f"Server task failed during startup: {exc}") from exc
-            else:
-                print(
-                    "Server task completed without error but server did not start (no exception)."
-                )
-                raise RuntimeError(
-                    "Server task finished early without error, "
-                    "but server likely did not start."
-                )
-        except asyncio.InvalidStateError:
-            print(
-                "Server task is done but in invalid state to get exception "
-                "(should not happen)."
-            )
-            raise RuntimeError("Server task done but in invalid state.")
-
-    uri = f"ws://localhost:{WS_PORT}/"
-    up = False
-    print(f"Attempting to connect to server at {uri}...")
-    for i in range(10):
-        await asyncio.sleep(0.3)
-        print(f"Connection attempt {i+1}/10 to {uri}")
-        try:
-            async with websockets.connect(uri) as temp_ws:
-                await temp_ws.ping()
-                up = True
-                print(
-                    f"Successfully connected and pinged server at {uri} on attempt {i+1}"
-                )
-                break
-        except (ConnectionRefusedError,
-                websockets.exceptions.InvalidStatusCode) as e:
-            print(
-                f"Connection attempt {i+1} failed "
-                f"(ConnectionRefused/InvalidStatusCode): {e}"
-            )
-            if server_task.done():
-                print(
-                    "Server task unexpectedly completed during connection attempts."
-                )
-                try:
-                    exc = server_task.exception()
-                    if exc: print(f"Server task exception: {exc}")
-                except asyncio.InvalidStateError: pass
-                break
-            continue
-        except Exception as e:
-            print(f"Connection attempt {i+1} failed (Other Exception): {e}")
-            continue
-
-    if not up:
-        print(f"WebSocket server at {uri} did not start after 10 attempts.")
-        if server_task and not server_task.done():
-            print("Cancelling server task...")
-            server_task.cancel()
-            try:
-                await server_task
-                print("Server task awaited after cancellation.")
-            except asyncio.CancelledError:
-                print("Server task successfully cancelled.")
-            except Exception as e:
-                print(f"Exception while awaiting cancelled server task: {e}")
-        elif server_task and server_task.done():
-             print("Server task was already done before cancellation attempt.")
-             try:
-                exc = server_task.exception()
-                if exc: print(f"Server task exception (if any): {exc}")
-             except asyncio.InvalidStateError: pass
-        raise RuntimeError(f"WebSocket server at {uri} did not start.")
-
-    print(f"Server at {uri} is up. Yielding URI.")
     try:
+        # Wait for setup_and_start_servers to complete and return the server object
+        # Add a timeout to prevent hanging indefinitely if server setup fails
+        ws_server = await asyncio.wait_for(server_task, timeout=10.0)
+        if ws_server is None:
+            raise RuntimeError("setup_and_start_servers returned None, server did not start.")
+
+        await asyncio.sleep(1.0) # Increased initial sleep significantly
+
+        uri = f"ws://localhost:{WS_PORT}/"
+        up = False
+        print(f"Attempting to connect to server at {uri}...")
+        for i in range(20):
+            await asyncio.sleep(0.2) # Re-added sleep inside the loop
+            print(f"Connection attempt {i+1}/20 to {uri}")
+            try:
+                # Set a timeout for the connect attempt itself
+                async with websockets.connect(uri, open_timeout=1.0) as temp_ws:
+                    await asyncio.wait_for(temp_ws.ping(), timeout=1.0) # Keep ping timeout
+                    up = True
+                    print(
+                        f"Successfully connected and pinged server at {uri} on attempt {i+1}"
+                    )
+                    break
+            except (ConnectionRefusedError, websockets.exceptions.InvalidStatusCode, asyncio.TimeoutError) as e:
+                print(
+                    f"Connection attempt {i+1} failed (ConnectionRefused/InvalidStatusCode/Timeout): {e}"
+                )
+                # If server_task itself failed, no point retrying
+                if server_task.done() and server_task.exception():
+                    print("Server setup task failed, aborting connection attempts.")
+                    break
+                continue
+            except Exception as e:
+                print(f"Connection attempt {i+1} failed (Other Exception): {e}")
+                continue
+
+        if not up:
+            # If server task completed and had an exception, raise that
+            if server_task.done() and server_task.exception():
+                raise RuntimeError(f"Server task failed: {server_task.exception()}") from server_task.exception()
+            raise RuntimeError(f"WebSocket server at {uri} did not start after 20 attempts.")
+
+        print(f"Server at {uri} is up. Yielding URI.")
         yield uri
+
     finally:
-        print(f"Test session finished. Cleaning up server at {uri}...")
+        print(f"Test session finished. Cleaning up server...")
+        if ws_server and hasattr(ws_server, 'close'):
+            print("Closing WebSocket server...")
+            ws_server.close()
+            await ws_server.wait_closed()
+            print("WebSocket server closed.")
+
+        # Cancel the server_task if it's somehow still running and not None
+        # This is more of a safeguard.
         if server_task and not server_task.done():
-            print("Cancelling server task post-session...")
+            print("Cancelling main server task (if still running)...")
             server_task.cancel()
             try:
                 await server_task
-                print("Server task awaited after cancellation (post-session).")
+                print("Main server task awaited after cancellation.")
             except asyncio.CancelledError:
-                print("Server task successfully cancelled (post-session).")
+                print("Main server task successfully cancelled.")
             except Exception as e:
-                print(
-                    "Exception while awaiting cancelled server task (post-session): {e}"
-                )
+                print(f"Exception while awaiting cancelled main server task: {e}")
         elif server_task and server_task.done():
-            print("Server task was already done post-session.")
-        
+            # If it's done, check for exceptions if not already handled by ws_server assignment
+            if not ws_server and server_task.exception(): # Only if ws_server wasn't assigned
+                 print(f"Server task was done with exception: {server_task.exception()}")
+            else:
+                 print("Main server task was already done.")
+
         # Final cleanup of globals after all tests in session are done
         print(
             "Clearing global component registry and event bus in "
@@ -578,7 +556,7 @@ async def test_websocket_handler_integration_emits_output_and_cleans_up(test_ser
 
     except asyncio.TimeoutError: pytest.fail("Timeout waiting for WS message.")
     except Exception as e:
-        if client_ws and not client_ws.closed: await client_ws.close()
+        if client_ws and client_ws.open: await client_ws.close() # Changed .closed to .open
         pytest.fail(f"WS integration test failed: {type(e).__name__} - {e}")
 
 

@@ -485,21 +485,23 @@ async def websocket_handler(
                     if not target_component_id_for_method and cid_from_params:
                         target_component_id_for_method = cid_from_params
 
-                    if (not registry.get_component_instance(target_component_id_for_method)
-                            and method not in ["component.discover"]):
+                    # Only check for component existence if a component is targeted
+                    # and the method is not a global discovery method.
+                    if target_component_id_for_method and \
+                       not registry.get_component_instance(target_component_id_for_method) and \
+                       method not in ["component.discover"]:
                         logger.error(
                             f"WS {ws_id}: Method '{method}' targeted component "
                             f"'{target_component_id_for_method}' which was not "
-                            f"found or not associated."
+                            f"found."
                         )
                         if req_id is not None:
                             resp["error"] = {"code": -32001,
-                                             "message": f"Component '{target_component_id_for_method}' not found for method '{method}'"}
+                                             "message": f"Component '{target_component_id_for_method}' not found."}
                             await websocket.send(json.dumps(resp))
                         continue
 
-                # Method routing logic (simplified for brevity in this diff,
-                # assume it's as before)
+                # Method routing logic
                 if method == "component.updateInput":
                     inputs = params.get("inputs")
                     current_cid_for_op = cid_from_params or associated
@@ -631,8 +633,8 @@ async def setup_and_start_servers():
         f"WebSocket server running on ws://localhost:{WS_PORT} "
         f"(within setup_and_start_servers)"
     )
-    await server.wait_closed() # Keep server running until wait_closed completes
-    return server # Though this will only be returned after server stops
+    # await server.wait_closed() # Removed: This would block until server stops
+    return server
 
 async def main():
     logging.basicConfig(

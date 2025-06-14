@@ -1,6 +1,5 @@
 import unittest
 from unittest.mock import AsyncMock # unittest.mock.call removed
-import asyncio # Required for IsolatedAsyncioTestCase
 
 from backend.event_bus import EventBus
 
