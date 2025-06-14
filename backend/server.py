@@ -56,6 +56,9 @@ component_registry = ComponentRegistry()
 # Dictionary to store client WebSocket connections mapping component_id to websocket object
 client_connections = {}
 
+# Dictionary to store active connections between components
+active_connections = {}
+
 async def send_component_output(component_id: str, output_name: str, data: any):
     """
     Sends a component.emitOutput message to the client via WebSocket.
@@ -86,6 +89,54 @@ async def process_request_hook(websocket, path_from_hook: str):
     """
     logger.debug(f"process_request_hook: path '{path_from_hook}' attached to connection {websocket.id}")
     websocket.actual_request_path = path_from_hook # Attach the path here
+
+async def handle_connection_create(params: dict) -> dict:
+    """
+    Handles the creation of a new connection between component ports.
+    """
+    connection_id = params.get("connectionId")
+    source_component_id = params.get("sourceComponentId")
+    source_port_name = params.get("sourcePortName")
+    target_component_id = params.get("targetComponentId")
+    target_port_name = params.get("targetPortName")
+
+    if not connection_id:
+        logger.error("connection.create failed: connectionId is required")
+        return {"error": {"code": -32602, "message": "Invalid params: connectionId is required"}}
+
+    logger.info(f"Attempting to create connection: {connection_id} from {source_component_id}:{source_port_name} to {target_component_id}:{target_port_name}")
+
+    connection_details = {
+        "connectionId": connection_id,
+        "sourceComponentId": source_component_id,
+        "sourcePortName": source_port_name,
+        "targetComponentId": target_component_id,
+        "targetPortName": target_port_name,
+        "status": "active" # Or any other relevant status
+    }
+    active_connections[connection_id] = connection_details
+    logger.info(f"Connection {connection_id} created successfully.")
+    return {"status": "success", "message": "Connection created successfully", "connectionId": connection_id}
+
+async def handle_connection_delete(params: dict) -> dict:
+    """
+    Handles the deletion of an existing connection.
+    """
+    connection_id = params.get("connectionId")
+
+    if not connection_id:
+        logger.error("connection.delete failed: connectionId is required")
+        return {"error": {"code": -32602, "message": "Invalid params: connectionId is required"}}
+
+    logger.info(f"Attempting to delete connection: {connection_id}")
+
+    if connection_id in active_connections:
+        del active_connections[connection_id]
+        logger.info(f"Connection {connection_id} deleted successfully.")
+        return {"status": "success", "message": "Connection deleted successfully", "connectionId": connection_id}
+    else:
+        logger.warning(f"Connection {connection_id} not found for deletion.")
+        return {"status": "not_found", "message": "Connection not found", "connectionId": connection_id}
 
 async def websocket_handler(websocket, registry: ComponentRegistry): # chat_backend argument removed, registry will provide the instance
     """
@@ -171,6 +222,22 @@ async def websocket_handler(websocket, registry: ComponentRegistry): # chat_back
                         except Exception as e:
                             logger.error(f"Error during component.getState: {e}", exc_info=True)
                             response["error"] = {"code": -32000, "message": f"Server error: {str(e)}"}
+
+                elif method == "connection.create":
+                    logger.info(f"Received connection.create request with params: {params}")
+                    response_data = await handle_connection_create(params)
+                    if "error" in response_data:
+                        response["error"] = response_data["error"]
+                    else:
+                        response["result"] = response_data
+
+                elif method == "connection.delete":
+                    logger.info(f"Received connection.delete request with params: {params}")
+                    response_data = await handle_connection_delete(params)
+                    if "error" in response_data:
+                        response["error"] = response_data["error"]
+                    else:
+                        response["result"] = response_data
 
                 else:
                     response["error"] = {"code": -32601, "message": "Method not found"}
