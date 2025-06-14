@@ -45,6 +45,10 @@ def send_component_output(component_id: str, output_name: str, data: any) -> asy
         return asyncio.create_task(_send_message(websocket, message))
     else:
         logger.warning(f"No WebSocket connection found for component_id: {component_id} when trying to emit output: {output_name}")
+        # Ensure it returns an awaitable, even if it's a dummy one.
+        async def dummy_task():
+            pass # Does nothing, just ensures an awaitable is returned.
+        return asyncio.create_task(dummy_task())
 
 async def _send_message(websocket, message: dict):
     try:
@@ -76,6 +80,49 @@ async def handle_connection_create(params: dict) -> dict:
         return {"error": {"code": -32602, "message": "Invalid params: connectionId is required"}}
 
     logger.info(f"Attempting to create connection: {connection_id} from {source_component_id}:{source_port_name} to {target_component_id}:{target_port_name}")
+
+    # --- Connection Validation Start ---
+    source_manifest = component_registry_instance.get_component_manifest(source_component_id)
+    target_manifest = component_registry_instance.get_component_manifest(target_component_id)
+
+    source_port_type = None
+    target_port_type = None
+
+    if not source_manifest:
+        logger.warning(f"Connection validation: Source component manifest not found for {source_component_id}. Allowing connection.")
+    else:
+        found_source_port = False
+        for port in source_manifest.get('nodes', {}).get('outputs', []):
+            if port.get('name') == source_port_name:
+                source_port_type = port.get('type')
+                found_source_port = True
+                break
+        if not found_source_port:
+            logger.warning(f"Connection validation: Source port {source_port_name} not found in manifest for {source_component_id}. Allowing connection.")
+
+    if not target_manifest:
+        logger.warning(f"Connection validation: Target component manifest not found for {target_component_id}. Allowing connection.")
+    else:
+        found_target_port = False
+        for port in target_manifest.get('nodes', {}).get('inputs', []):
+            if port.get('name') == target_port_name:
+                target_port_type = port.get('type')
+                found_target_port = True
+                break
+        if not found_target_port:
+            logger.warning(f"Connection validation: Target port {target_port_name} not found in manifest for {target_component_id}. Allowing connection.")
+
+    # Validation Logic
+    if source_port_type and target_port_type: # Only validate if both types are known
+        if source_port_type == "text" and target_port_type == "text":
+            logger.info(f"Connection validation passed: text to text ({source_component_id}:{source_port_name} -> {target_component_id}:{target_port_name})")
+        elif source_port_type == "output" and target_port_type == "output":
+            logger.error(f"Connection validation failed: Output-to-output connection attempt from {source_component_id}:{source_port_name} to {target_component_id}:{target_port_name}")
+            return {"error": {"code": -32002, "message": "Connection validation failed: Output-to-output connections are not allowed"}}
+        # Allow other combinations for now
+        else:
+            logger.info(f"Connection validation passed (other types): {source_port_type} to {target_port_type} ({source_component_id}:{source_port_name} -> {target_component_id}:{target_port_name})")
+    # --- Connection Validation End ---
 
     details = {
         "connectionId": connection_id,

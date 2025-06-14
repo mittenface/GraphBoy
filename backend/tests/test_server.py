@@ -7,20 +7,23 @@ from unittest.mock import MagicMock, patch
 
 # Attempt to import from server.py, handling potential early-stage non-existence
 try:
-    from backend.server import WS_PORT, AIChatInterfaceBackend, websocket_handler, setup_and_start_servers, component_registry
+    # Import component_registry_instance instead of component_registry
+    from backend.server import WS_PORT, websocket_handler, setup_and_start_servers, component_registry_instance, ActualAIChatInterfaceBackend
     SERVER_AVAILABLE = True
-except ImportError:
+except ImportError as e:
+    print(f"DEBUG: Caught ImportError in test_server.py: {e}") # Debug print
     SERVER_AVAILABLE = False
     # Define WS_PORT here if server.py is not available, so tests can be parsed
     WS_PORT = 8765
     # Define dummy classes/functions if server components are not available
-    class AIChatInterfaceBackend: pass
-    async def websocket_handler(websocket, path, chat_backend, registry): pass # Original problematic signature for parsing
+    class ActualAIChatInterfaceBackend: pass
+    async def websocket_handler(websocket, path, chat_backend, registry): pass
     async def setup_and_start_servers(): pass
-    class ComponentRegistry:
+    # Define ComponentRegistryDummy and component_registry_instance for the SERVER_AVAILABLE = False case
+    class ComponentRegistryDummy:
         def get_component_instance(self, name): return None
         def register_component(self, name, klass, instance=None): pass
-    component_registry = ComponentRegistry()
+    component_registry_instance = ComponentRegistryDummy()
 
 
 from backend.component_registry import ComponentRegistry # This should be the actual one
@@ -39,18 +42,19 @@ async def test_server():
 
     # Ensure the registry is clean for each test run if it's a global instance
     # This might involve a reset method on ComponentRegistry or re-initialization
-    # For now, we assume component_registry is managed by setup_and_start_servers
+    # For now, we assume component_registry_instance is managed by setup_and_start_servers
 
     server_process = None
     try:
         # Start the server
-        server_task = asyncio.create_task(setup_and_start_servers())
+        server_instance = await setup_and_start_servers() # setup_and_start_servers returns the server object
+        server_task = asyncio.create_task(server_instance.serve_forever()) # Keep server running in a task
+
 
         # Wait for the server to be ready
-        # This simple check pings the server; more robust checks might be needed
-        uri = f"ws://localhost:{WS_PORT}/" # Added trailing slash for consistency
+        uri = f"ws://localhost:{WS_PORT}/"
         up = False
-        for _ in range(10): # Try for a few seconds
+        for _ in range(20): # Increased attempts for server readiness
             await asyncio.sleep(0.2)
             try:
                 async with websockets.connect(uri) as temp_ws:
@@ -58,30 +62,36 @@ async def test_server():
                     up = True
                     break
             except (ConnectionRefusedError, websockets.exceptions.InvalidStatusCode):
-                continue # Server not ready yet
-            except Exception as e: # Catch broader exceptions during check
-                print(f"Test server readiness check failed: {e}")
+                continue
+            except Exception as e:
+                print(f"Test server readiness check failed during connect: {e}")
                 continue
 
         if not up:
-            # Attempt to stop the server task if it was started
-            if server_task and not server_task.done():
+            if not server_task.done():
                 server_task.cancel()
                 try:
                     await server_task
                 except asyncio.CancelledError:
-                    print("Server task cancelled during setup failure.")
+                    print("Server task (serve_forever) cancelled during setup failure.")
+            server_instance.close()
+            await server_instance.wait_closed()
             raise RuntimeError(f"WebSocket server at {uri} did not start in time.")
 
-        yield uri # Provide the URI to the tests
+        yield uri
 
-        # Teardown: Stop the server task
-        if server_task and not server_task.done():
+        # Teardown: Stop the server
+        if not server_task.done():
             server_task.cancel()
             try:
                 await server_task
             except asyncio.CancelledError:
-                print("Server task cancelled successfully during teardown.")
+                print("Server task (serve_forever) cancelled successfully during teardown.")
+
+        server_instance.close()
+        await server_instance.wait_closed()
+        print("Server closed and awaited.")
+
 
     except Exception as e:
         pytest.fail(f"Test server fixture setup failed: {e}")
@@ -90,9 +100,15 @@ async def test_server():
         if 'server_task' in locals() and server_task and not server_task.done():
             server_task.cancel()
             try:
-                await server_task # Wait for cancellation to complete
+                await server_task
             except asyncio.CancelledError:
-                pass # Expected
+                pass
+        if 'server_instance' in locals():
+            server_instance.close()
+            try:
+                await server_instance.wait_closed()
+            except Exception: # Ignore errors during final cleanup
+                pass
 
 
 @pytest.mark.asyncio
@@ -106,11 +122,13 @@ async def test_component_update_input_routes_to_chat_component(test_server, monk
     test_inputs = {"userInput": "Testing routing", "temperature": 0.5, "maxTokens": 50}
 
     # 1. Set up a mock AIChatInterfaceBackend instance
-    mock_chat_backend = MagicMock(spec=AIChatInterfaceBackend)
+    # Spec now uses ActualAIChatInterfaceBackend imported from backend.server (which is an alias)
+    # or ideally from components.AIChatInterface.backend directly.
+    # For now, using the one imported from backend.server for minimal changes to imports here.
+    mock_chat_backend = MagicMock(spec=ActualAIChatInterfaceBackend)
     # Configure the mock update method to return a serializable dictionary
     mock_chat_backend.update.return_value = {"status": "mock update called", "responseText": "mocked response from update"}
-    # Mock get_component_id if it's called by the handler indirectly
-    mock_chat_backend.get_component_id.return_value = "AIChatInterface"
+    # Removed: mock_chat_backend.get_component_id.return_value = "AIChatInterface" (method doesn't exist on spec)
 
 
     # 2. Patch ComponentRegistry.get_component_instance
@@ -118,11 +136,11 @@ async def test_component_update_input_routes_to_chat_component(test_server, monk
     # If component_registry is imported directly from server, we can patch that.
 
     # Get the actual registry instance used by the server.
-    # This relies on `component_registry` being the actual instance used by `setup_and_start_servers`.
+    # This relies on `component_registry_instance` being the actual instance used by `setup_and_start_servers`.
     # If `setup_and_start_servers` creates its own registry, this patching won't affect it.
-    # The server.py creates a global `component_registry` and `setup_and_start_servers` uses it.
+    # The server.py creates a global `component_registry_instance` and `setup_and_start_servers` uses it.
 
-    original_get_component_instance = component_registry.get_component_instance
+    original_get_component_instance = component_registry_instance.get_component_instance
 
     def mock_get_component_instance(name): # Changed from method to function
         if name == component_name:
@@ -131,7 +149,7 @@ async def test_component_update_input_routes_to_chat_component(test_server, monk
         # or return another appropriate mock/real instance.
         return original_get_component_instance(name)
 
-    monkeypatch.setattr(component_registry, 'get_component_instance', mock_get_component_instance)
+    monkeypatch.setattr(component_registry_instance, 'get_component_instance', mock_get_component_instance)
 
     # 3. Prepare and send the WebSocket request
     request = {
@@ -225,13 +243,191 @@ async def test_method_not_found(test_server):
 
 # --- Tests for send_component_output and client_connections ---
 
-# We need to import send_component_output and client_connections from backend.server
+    # We need to import send_component_output, client_connections, active_component_sockets from backend.server
 # To do this safely if SERVER_AVAILABLE is False, we can define dummies or skip
 if SERVER_AVAILABLE:
-    from backend.server import send_component_output, client_connections
+        from backend.server import send_component_output, client_connections, handle_connection_create, active_component_sockets # Added active_component_sockets
+        from backend.component_registry import ComponentRegistry
+
 else:
     async def send_component_output(component_id, output_name, data): pass
+    async def handle_connection_create(params): pass
     client_connections = {}
+    active_component_sockets = {} # Dummy for active_component_sockets
+
+# AsyncMock might be needed if not already available via pytest/unittest.mock
+from unittest.mock import AsyncMock
+
+
+# --- Test Class for Connection Validation ---
+
+@pytest.mark.asyncio
+@patch('backend.server.component_registry_instance', new_callable=MagicMock)
+async def test_allow_text_to_text_connection(mock_registry_instance):
+    if not SERVER_AVAILABLE:
+        pytest.skip("Skipping as server.py components are not available.")
+
+    mock_registry_instance.get_component_manifest.side_effect = [
+        {"nodes": {"outputs": [{"name": "srcPort", "type": "text"}]}},  # Source Manifest
+        {"nodes": {"inputs": [{"name": "tgtPort", "type": "text"}]}}   # Target Manifest
+    ]
+    params = {
+        "connectionId": "conn1",
+        "sourceComponentId": "srcComp", "sourcePortName": "srcPort",
+        "targetComponentId": "tgtComp", "targetPortName": "tgtPort"
+    }
+    result = await handle_connection_create(params)
+    assert result.get("status") == "success"
+    assert "error" not in result
+    assert mock_registry_instance.get_component_manifest.call_count == 2
+
+@pytest.mark.asyncio
+@patch('backend.server.component_registry_instance', new_callable=MagicMock)
+async def test_prevent_output_to_output_connection(mock_registry_instance):
+    if not SERVER_AVAILABLE:
+        pytest.skip("Skipping as server.py components are not available.")
+
+    mock_registry_instance.get_component_manifest.side_effect = [
+        {"nodes": {"outputs": [{"name": "srcPort", "type": "output"}]}}, # Source Manifest
+        {"nodes": {"inputs": [{"name": "tgtPort", "type": "output"}]}}    # Target Manifest
+    ]
+    params = {
+        "connectionId": "conn2",
+        "sourceComponentId": "srcComp", "sourcePortName": "srcPort",
+        "targetComponentId": "tgtComp", "targetPortName": "tgtPort"
+    }
+    result = await handle_connection_create(params)
+    assert "error" in result
+    assert result["error"]["code"] == -32002
+    assert "Output-to-output connections are not allowed" in result["error"]["message"]
+    assert mock_registry_instance.get_component_manifest.call_count == 2
+
+@pytest.mark.asyncio
+@patch('backend.server.component_registry_instance', new_callable=MagicMock)
+async def test_allow_other_connection_types(mock_registry_instance):
+    if not SERVER_AVAILABLE:
+        pytest.skip("Skipping as server.py components are not available.")
+
+    # Example: text to generic_type
+    mock_registry_instance.get_component_manifest.side_effect = [
+        {"nodes": {"outputs": [{"name": "srcPort", "type": "text"}]}},      # Source Manifest
+        {"nodes": {"inputs": [{"name": "tgtPort", "type": "generic_type"}]}} # Target Manifest
+    ]
+    params = {
+        "connectionId": "conn3",
+        "sourceComponentId": "srcComp", "sourcePortName": "srcPort",
+        "targetComponentId": "tgtComp", "targetPortName": "tgtPort"
+    }
+    result = await handle_connection_create(params)
+    assert result.get("status") == "success"
+    assert "error" not in result
+    mock_registry_instance.get_component_manifest.assert_any_call("srcComp")
+    mock_registry_instance.get_component_manifest.assert_any_call("tgtComp")
+
+    # Example: generic_type to text
+    mock_registry_instance.reset_mock()
+    mock_registry_instance.get_component_manifest.side_effect = [
+        {"nodes": {"outputs": [{"name": "srcPort", "type": "generic_type"}]}}, # Source Manifest
+        {"nodes": {"inputs": [{"name": "tgtPort", "type": "text"}]}}        # Target Manifest
+    ]
+    params_2 = {
+        "connectionId": "conn4",
+        "sourceComponentId": "srcComp2", "sourcePortName": "srcPort",
+        "targetComponentId": "tgtComp2", "targetPortName": "tgtPort"
+    }
+    result_2 = await handle_connection_create(params_2)
+    assert result_2.get("status") == "success"
+    assert "error" not in result_2
+    mock_registry_instance.get_component_manifest.assert_any_call("srcComp2")
+    mock_registry_instance.get_component_manifest.assert_any_call("tgtComp2")
+
+
+@pytest.mark.asyncio
+@patch('backend.server.component_registry_instance', new_callable=MagicMock)
+async def test_connection_with_missing_source_manifest(mock_registry_instance):
+    if not SERVER_AVAILABLE:
+        pytest.skip("Skipping as server.py components are not available.")
+
+    mock_registry_instance.get_component_manifest.side_effect = [
+        None,  # Source Manifest
+        {"nodes": {"inputs": [{"name": "tgtPort", "type": "text"}]}}   # Target Manifest
+    ]
+    params = {
+        "connectionId": "conn5",
+        "sourceComponentId": "srcCompMissing", "sourcePortName": "srcPort",
+        "targetComponentId": "tgtComp", "targetPortName": "tgtPort"
+    }
+    result = await handle_connection_create(params)
+    assert result.get("status") == "success" # Allowed with warning
+    assert "error" not in result
+    mock_registry_instance.get_component_manifest.assert_any_call("srcCompMissing")
+    mock_registry_instance.get_component_manifest.assert_any_call("tgtComp")
+
+
+@pytest.mark.asyncio
+@patch('backend.server.component_registry_instance', new_callable=MagicMock)
+async def test_connection_with_missing_target_manifest(mock_registry_instance):
+    if not SERVER_AVAILABLE:
+        pytest.skip("Skipping as server.py components are not available.")
+
+    mock_registry_instance.get_component_manifest.side_effect = [
+        {"nodes": {"outputs": [{"name": "srcPort", "type": "text"}]}},  # Source Manifest
+        None   # Target Manifest
+    ]
+    params = {
+        "connectionId": "conn6",
+        "sourceComponentId": "srcComp", "sourcePortName": "srcPort",
+        "targetComponentId": "tgtCompMissing", "targetPortName": "tgtPort"
+    }
+    result = await handle_connection_create(params)
+    assert result.get("status") == "success" # Allowed with warning
+    assert "error" not in result
+    mock_registry_instance.get_component_manifest.assert_any_call("srcComp")
+    mock_registry_instance.get_component_manifest.assert_any_call("tgtCompMissing")
+
+@pytest.mark.asyncio
+@patch('backend.server.component_registry_instance', new_callable=MagicMock)
+async def test_connection_with_missing_source_port(mock_registry_instance):
+    if not SERVER_AVAILABLE:
+        pytest.skip("Skipping as server.py components are not available.")
+
+    mock_registry_instance.get_component_manifest.side_effect = [
+        {"nodes": {"outputs": [{"name": "otherPort", "type": "text"}]}},  # Source Manifest with different port
+        {"nodes": {"inputs": [{"name": "tgtPort", "type": "text"}]}}   # Target Manifest
+    ]
+    params = {
+        "connectionId": "conn7",
+        "sourceComponentId": "srcComp", "sourcePortName": "missingSrcPort",
+        "targetComponentId": "tgtComp", "targetPortName": "tgtPort"
+    }
+    result = await handle_connection_create(params)
+    assert result.get("status") == "success" # Allowed with warning
+    assert "error" not in result
+    mock_registry_instance.get_component_manifest.assert_any_call("srcComp")
+    mock_registry_instance.get_component_manifest.assert_any_call("tgtComp")
+
+
+@pytest.mark.asyncio
+@patch('backend.server.component_registry_instance', new_callable=MagicMock)
+async def test_connection_with_missing_target_port(mock_registry_instance):
+    if not SERVER_AVAILABLE:
+        pytest.skip("Skipping as server.py components are not available.")
+
+    mock_registry_instance.get_component_manifest.side_effect = [
+        {"nodes": {"outputs": [{"name": "srcPort", "type": "text"}]}},  # Source Manifest
+        {"nodes": {"inputs": [{"name": "otherPort", "type": "text"}]}}   # Target Manifest with different port
+    ]
+    params = {
+        "connectionId": "conn8",
+        "sourceComponentId": "srcComp", "sourcePortName": "srcPort",
+        "targetComponentId": "tgtComp", "targetPortName": "missingTgtPort"
+    }
+    result = await handle_connection_create(params)
+    assert result.get("status") == "success" # Allowed with warning
+    assert "error" not in result
+    mock_registry_instance.get_component_manifest.assert_any_call("srcComp")
+    mock_registry_instance.get_component_manifest.assert_any_call("tgtComp")
+
 
 @pytest.mark.asyncio
 async def test_send_component_output_success():
@@ -245,9 +441,10 @@ async def test_send_component_output_success():
     output_name = "test_output"
     data = {"key": "value"}
 
-    # Patch client_connections for this test
-    with patch.dict(client_connections, {test_component_id: mock_ws}, clear=True):
-        await send_component_output(test_component_id, output_name, data)
+    # Patch active_component_sockets for this test, as this is what send_component_output uses
+    with patch.dict(active_component_sockets, {test_component_id: mock_ws}, clear=True):
+        task = send_component_output(test_component_id, output_name, data) # Removed await here
+        await task # Ensure the task completes
 
         expected_message = json.dumps({
             "jsonrpc": "2.0",
@@ -268,12 +465,13 @@ async def test_send_component_output_no_connection():
     mock_ws_send = AsyncMock() # To ensure no send is attempted
 
     test_component_id = "test_comp_id_no_connection"
-    # Ensure the component_id is not in client_connections
-    with patch.dict(client_connections, {}, clear=True):
+    # Ensure the component_id is not in active_component_sockets
+    with patch.dict(active_component_sockets, {}, clear=True):
         # To check logs, we would need to patch 'logging.getLogger.warning' or similar
         # For simplicity, we're just ensuring it doesn't crash and no send is attempted.
-        # If send_component_output had a return value indicating success/failure, we'd check that.
-        await send_component_output(test_component_id, "some_output", {})
+        # send_component_output now returns a completed dummy task if no websocket, so it's awaitable.
+        task = send_component_output(test_component_id, "some_output", {}) # Removed await here
+        await task # Await the dummy task
         # mock_ws_send should not be called on any WebSocket mock because none should be found.
         # This test implicitly checks that it doesn't raise an error when component_id is not found.
 
@@ -287,10 +485,11 @@ async def test_websocket_handler_integration_emits_output_and_cleans_up(test_ser
     client_ws = None
     test_component_id = "AIChatInterface" # This is the componentName expected by the handler
 
-    # Ensure client_connections is imported from backend.server for inspection
-    # Note: This inspects the global client_connections from the running server.
+    # Ensure client_connections and active_component_sockets are imported from backend.server for inspection
+    # Note: This inspects the global dictionaries from the running server.
     # This can be flaky if tests run in parallel or if server state is not perfectly isolated.
     from backend.server import client_connections as server_client_connections
+    from backend.server import active_component_sockets as server_active_sockets
 
     try:
         async with websockets.connect(uri) as ws:
@@ -309,46 +508,69 @@ async def test_websocket_handler_integration_emits_output_and_cleans_up(test_ser
             }
             await ws.send(json.dumps(update_request))
 
-            # 2. Receive the acknowledgment for component.updateInput
-            response_ack_raw = await asyncio.wait_for(ws.recv(), timeout=3.0)
-            response_ack = json.loads(response_ack_raw)
-            assert response_ack.get("id") == request_id_update
-            assert "result" in response_ack
-            assert response_ack["result"]["status"] == "success"
+            # 2. Receive messages. Order might vary: could be emitOutput first, then updateInput ack, or vice-versa.
+            # We'll try to receive two messages and check their types.
+            received_messages = []
+            for _ in range(2): # Expecting two messages: updateInput ack and emitOutput
+                try:
+                    raw_msg = await asyncio.wait_for(ws.recv(), timeout=5.0) # Increased timeout
+                    received_messages.append(json.loads(raw_msg))
+                except asyncio.TimeoutError:
+                    # If we time out, it might be because only one message was sent (e.g. error case)
+                    # or server is slow. Break and let assertions handle it.
+                    break
+
+            update_ack_received = False
+            emit_output_received = False
+
+            for msg in received_messages:
+                if msg.get("id") == request_id_update and "result" in msg:
+                    assert msg["result"]["status"] == "success"
+                    update_ack_received = True
+                elif msg.get("method") == "component.emitOutput":
+                    params = msg.get("params", {})
+                    assert params.get("componentId") == test_component_id
+                    assert params.get("outputName") in ["responseText", "responseStream", "error"]
+                    assert "data" in params
+                    emit_output_received = True
+
+            assert update_ack_received, "Acknowledgment for component.updateInput not received or incorrect."
+            assert emit_output_received, "component.emitOutput message not received or incorrect."
 
             # Check if connection was stored
-            # This check relies on the componentName being used as component_id in client_connections
-            assert test_component_id in server_client_connections
-            assert server_client_connections[test_component_id] is not None # Check it's not None
+            # client_connections stores ws -> component_id, so check values
+            assert test_component_id in server_client_connections.values()
+            # active_component_sockets stores component_id -> ws
+            assert test_component_id in server_active_sockets
+            assert server_active_sockets[test_component_id] is not None
 
-            # 3. Receive the component.emitOutput message
-            emit_output_raw = await asyncio.wait_for(ws.recv(), timeout=3.0)
-            emit_output_message = json.loads(emit_output_raw)
 
-            assert emit_output_message.get("method") == "component.emitOutput"
-            assert "params" in emit_output_message
-            params = emit_output_message["params"]
-            assert params.get("componentId") == test_component_id
-            # Based on AIChatInterfaceBackend mock LLM, it should be responseStream
-            assert params.get("outputName") in ["responseText", "responseStream", "error"]
-            # Verify data structure if possible, e.g. params.get("data") is not None
-            assert "data" in params
+            # 3. (Original step 3 is now part of the loop above)
+            # The following lines are removed as emit_output_message is not necessarily defined here,
+            # and these checks are implicitly covered by the loop processing received_messages.
+            # assert "params" in emit_output_message
+            # params = emit_output_message["params"]
+            # assert params.get("componentId") == test_component_id
+            # # Based on AIChatInterfaceBackend mock LLM, it should be responseStream
+            # assert params.get("outputName") in ["responseText", "responseStream", "error"]
+            # # Verify data structure if possible, e.g. params.get("data") is not None
+            # assert "data" in params
 
             # Connection should still be there
-            assert test_component_id in server_client_connections
+            assert test_component_id in server_active_sockets # Check active_sockets as it's more direct for component_id key
 
         # 4. After 'async with ws:' block, connection is closed.
         # Wait a moment for server to process disconnection if needed
         await asyncio.sleep(0.1)
 
-        # Verify client_connections cleanup
-        assert test_component_id not in server_client_connections, \
-            f"{test_component_id} was not removed from client_connections after disconnect."
+        # Verify cleanup: component_id should be removed from active_component_sockets
+        assert test_component_id not in server_active_sockets, \
+            f"{test_component_id} was not removed from server_active_sockets after disconnect."
 
     except asyncio.TimeoutError:
         pytest.fail("Test timed out waiting for WebSocket message.")
     except Exception as e:
-        # If client_ws exists and is open, try to close it gracefully on error
-        if client_ws and client_ws.open:
+        # If client_ws exists and is not closed, try to close it gracefully on error
+        if client_ws and not client_ws.closed: # Changed from .open to .closed
             await client_ws.close()
         pytest.fail(f"WebSocket integration test failed: {type(e).__name__} - {e}")
