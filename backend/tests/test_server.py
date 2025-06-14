@@ -221,3 +221,134 @@ async def test_method_not_found(test_server):
     assert response.get("id") == request_id
     assert "error" in response
     assert response["error"]["code"] == -32601 # Method not found
+
+
+# --- Tests for send_component_output and client_connections ---
+
+# We need to import send_component_output and client_connections from backend.server
+# To do this safely if SERVER_AVAILABLE is False, we can define dummies or skip
+if SERVER_AVAILABLE:
+    from backend.server import send_component_output, client_connections
+else:
+    async def send_component_output(component_id, output_name, data): pass
+    client_connections = {}
+
+@pytest.mark.asyncio
+async def test_send_component_output_success():
+    if not SERVER_AVAILABLE:
+        pytest.skip("Skipping as server.py components are not available for send_component_output.")
+
+    mock_ws = MagicMock(spec=websockets.WebSocketServerProtocol)
+    mock_ws.send = AsyncMock() # Use AsyncMock for awaitable .send()
+
+    test_component_id = "test_comp_id_send"
+    output_name = "test_output"
+    data = {"key": "value"}
+
+    # Patch client_connections for this test
+    with patch.dict(client_connections, {test_component_id: mock_ws}, clear=True):
+        await send_component_output(test_component_id, output_name, data)
+
+        expected_message = json.dumps({
+            "jsonrpc": "2.0",
+            "method": "component.emitOutput",
+            "params": {
+                "componentId": test_component_id,
+                "outputName": output_name,
+                "data": data
+            }
+        })
+        mock_ws.send.assert_called_once_with(expected_message)
+
+@pytest.mark.asyncio
+async def test_send_component_output_no_connection():
+    if not SERVER_AVAILABLE:
+        pytest.skip("Skipping as server.py components are not available for send_component_output.")
+
+    mock_ws_send = AsyncMock() # To ensure no send is attempted
+
+    test_component_id = "test_comp_id_no_connection"
+    # Ensure the component_id is not in client_connections
+    with patch.dict(client_connections, {}, clear=True):
+        # To check logs, we would need to patch 'logging.getLogger.warning' or similar
+        # For simplicity, we're just ensuring it doesn't crash and no send is attempted.
+        # If send_component_output had a return value indicating success/failure, we'd check that.
+        await send_component_output(test_component_id, "some_output", {})
+        # mock_ws_send should not be called on any WebSocket mock because none should be found.
+        # This test implicitly checks that it doesn't raise an error when component_id is not found.
+
+
+@pytest.mark.asyncio
+async def test_websocket_handler_integration_emits_output_and_cleans_up(test_server):
+    if not SERVER_AVAILABLE:
+        pytest.skip("Skipping test as server.py components are not available.")
+
+    uri = test_server
+    client_ws = None
+    test_component_id = "AIChatInterface" # This is the componentName expected by the handler
+
+    # Ensure client_connections is imported from backend.server for inspection
+    # Note: This inspects the global client_connections from the running server.
+    # This can be flaky if tests run in parallel or if server state is not perfectly isolated.
+    from backend.server import client_connections as server_client_connections
+
+    try:
+        async with websockets.connect(uri) as ws:
+            client_ws = ws # Keep a reference for checking connection state later
+            # 1. Send component.updateInput to trigger backend logic and populate client_connections
+            request_id_update = "integration-update-1"
+            user_input = "Test emit output"
+            update_request = {
+                "jsonrpc": "2.0",
+                "method": "component.updateInput",
+                "params": {
+                    "componentName": test_component_id,
+                    "inputs": {"userInput": user_input, "temperature": 0.1, "maxTokens": 10}
+                },
+                "id": request_id_update
+            }
+            await ws.send(json.dumps(update_request))
+
+            # 2. Receive the acknowledgment for component.updateInput
+            response_ack_raw = await asyncio.wait_for(ws.recv(), timeout=3.0)
+            response_ack = json.loads(response_ack_raw)
+            assert response_ack.get("id") == request_id_update
+            assert "result" in response_ack
+            assert response_ack["result"]["status"] == "success"
+
+            # Check if connection was stored
+            # This check relies on the componentName being used as component_id in client_connections
+            assert test_component_id in server_client_connections
+            assert server_client_connections[test_component_id] is not None # Check it's not None
+
+            # 3. Receive the component.emitOutput message
+            emit_output_raw = await asyncio.wait_for(ws.recv(), timeout=3.0)
+            emit_output_message = json.loads(emit_output_raw)
+
+            assert emit_output_message.get("method") == "component.emitOutput"
+            assert "params" in emit_output_message
+            params = emit_output_message["params"]
+            assert params.get("componentId") == test_component_id
+            # Based on AIChatInterfaceBackend mock LLM, it should be responseStream
+            assert params.get("outputName") in ["responseText", "responseStream", "error"]
+            # Verify data structure if possible, e.g. params.get("data") is not None
+            assert "data" in params
+
+            # Connection should still be there
+            assert test_component_id in server_client_connections
+
+        # 4. After 'async with ws:' block, connection is closed.
+        # Wait a moment for server to process disconnection if needed
+        await asyncio.sleep(0.1)
+
+        # Verify client_connections cleanup
+        assert test_component_id not in server_client_connections, \
+            f"{test_component_id} was not removed from client_connections after disconnect."
+
+    except asyncio.TimeoutError:
+        pytest.fail("Test timed out waiting for WebSocket message.")
+    except Exception as e:
+        # If client_ws exists and is open, try to close it gracefully on error
+        if client_ws and client_ws.open:
+            await client_ws.close()
+        pytest.fail(f"WebSocket integration test failed: {type(e).__name__} - {e}")

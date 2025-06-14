@@ -1,6 +1,8 @@
 import unittest
+from unittest.mock import AsyncMock
 import sys
 from pathlib import Path
+import asyncio # Required for IsolatedAsyncioTestCase
 
 # Add the project root to sys.path to allow imports like 'components.AIChatInterface'
 project_root = Path(__file__).resolve().parent.parent.parent.parent
@@ -9,75 +11,99 @@ if str(project_root) not in sys.path:
 
 from components.AIChatInterface.backend import AIChatInterfaceBackend
 
-class TestAIChatInterfaceBackend(unittest.TestCase):
-    def setUp(self):
-        self.backend = AIChatInterfaceBackend()
+class TestAIChatInterfaceBackend(unittest.IsolatedAsyncioTestCase): # Inherit from IsolatedAsyncioTestCase
+
+    async def asyncSetUp(self): # Renamed from setUp and made async
+        self.mock_send_output_func = AsyncMock() # AsyncMock for async function
+        self.test_component_id = "test-chat-interface"
+        self.backend = AIChatInterfaceBackend(
+            component_id=self.test_component_id,
+            send_component_output_func=self.mock_send_output_func
+        )
         # self.backend.create({}) # No specific config needed for these tests
 
-    def test_backend_instantiation(self):
+    async def test_backend_instantiation(self):
         """Test if the backend can be instantiated."""
         self.assertIsNotNone(self.backend, "Backend should be instantiable")
+        self.assertEqual(self.backend.component_id, self.test_component_id)
+        self.assertEqual(self.backend.send_output_func, self.mock_send_output_func)
 
-    def test_create_stores_config(self):
+    async def test_create_stores_config(self):
         """Test if the create method stores configuration."""
         sample_config = {"model": "test-model", "setting": "test-setting"}
+        # create is not async, so no await needed
         response = self.backend.create(config=sample_config)
         self.assertEqual(self.backend.config, sample_config, "Config should be stored in self.backend.config")
         self.assertIn("status", response)
         self.assertEqual(response["status"], "success")
 
-    def test_update_with_mock_llm_defaults(self):
-        """Test update method with mock LLM and default parameters."""
+    async def test_update_with_mock_llm_defaults_emits_stream(self):
+        """Test update method emits responseStream by default."""
         user_input = "Hello with defaults"
         # Defaults from process_request signature are temp=0.7, max_tokens=256
-        # These are passed by update() to process_request(), then to mock_llm_api()
-        expected_response_text = f"Mock LLM response to '{user_input}' (temp=0.7, tokens=256)"
-        expected_response_stream = f"Mock LLM stream for '{user_input}' chunk 1\nMock LLM stream for '{user_input}' chunk 2\n"
+        expected_response_stream_content = f"Mock LLM stream for '{user_input}' chunk 1\nMock LLM stream for '{user_input}' chunk 2\n"
 
-        response = self.backend.update({"userInput": user_input})
+        response = await self.backend.update({"userInput": user_input})
 
-        self.assertFalse(response["error"])
-        self.assertEqual(response["responseText"], expected_response_text)
-        self.assertEqual(response["responseStream"], expected_response_stream)
+        self.mock_send_output_func.assert_called_once_with(
+            self.test_component_id,
+            "responseStream", # Default mock_llm_api provides responseStream
+            expected_response_stream_content
+        )
+        self.assertEqual(response, {"status": "success", "message": "Output will be sent via component.emitOutput"})
 
-    def test_update_with_mock_llm_custom_params(self):
-        """Test update method with mock LLM and custom parameters."""
+    async def test_update_with_mock_llm_custom_params_emits_stream(self):
+        """Test update method with custom params emits responseStream."""
         user_input = "Hello with custom params"
         temp = 0.5
         tokens = 100
-        expected_response_text = f"Mock LLM response to '{user_input}' (temp={temp}, tokens={tokens})"
-        expected_response_stream = f"Mock LLM stream for '{user_input}' chunk 1\nMock LLM stream for '{user_input}' chunk 2\n"
+        expected_response_stream_content = f"Mock LLM stream for '{user_input}' chunk 1\nMock LLM stream for '{user_input}' chunk 2\n"
 
-        response = self.backend.update({
+        response = await self.backend.update({
             "userInput": user_input,
             "temperature": temp,
             "max_tokens": tokens
         })
 
-        self.assertFalse(response["error"])
-        self.assertEqual(response["responseText"], expected_response_text)
-        self.assertEqual(response["responseStream"], expected_response_stream)
+        self.mock_send_output_func.assert_called_once_with(
+            self.test_component_id,
+            "responseStream", # Default mock_llm_api provides responseStream
+            expected_response_stream_content
+        )
+        self.assertEqual(response, {"status": "success", "message": "Output will be sent via component.emitOutput"})
 
-    def test_update_no_input(self):
-        """Test update method when no userInput is provided."""
-        response = self.backend.update({})
-        self.assertFalse(response["error"]) # As per current update logic for no input
-        self.assertEqual(response["responseText"], "No input provided.")
-        self.assertEqual(response["responseStream"], "")
+    async def test_update_no_input_emits_error(self):
+        """Test update method when no userInput is provided emits an error."""
+        response = await self.backend.update({})
 
-    def test_response_structure_after_update(self):
-        """Ensure the response structure from update matches manifest output nodes."""
-        user_input = "Structure Test via Update"
-        response = self.backend.update({"userInput": user_input})
+        self.mock_send_output_func.assert_called_once_with(
+            self.test_component_id,
+            "error",
+            "No input provided."
+        )
+        self.assertEqual(response, {"status": "error", "message": "No input provided, error emitted."})
 
-        self.assertIn("responseText", response)
-        self.assertTrue(isinstance(response["responseText"], str))
+    async def test_update_emits_error_on_llm_error(self):
+        """Test update method emits error if mock_llm_api returns an error."""
+        user_input = "Trigger error"
+        # Temporarily patch mock_llm_api to return an error
+        original_mock_llm_api = AIChatInterfaceBackend.mock_llm_api
+        async def mock_llm_api_error_version(*args, **kwargs):
+            return {"error": "Simulated LLM error"}
+        AIChatInterfaceBackend.mock_llm_api = mock_llm_api_error_version
 
-        self.assertIn("responseStream", response)
-        self.assertTrue(isinstance(response["responseStream"], str))
+        response = await self.backend.update({"userInput": user_input})
 
-        self.assertIn("error", response)
-        self.assertTrue(isinstance(response["error"], bool))
+        self.mock_send_output_func.assert_called_once_with(
+            self.test_component_id,
+            "error",
+            "Simulated LLM error"
+        )
+        self.assertEqual(response, {"status": "success", "message": "Output will be sent via component.emitOutput"})
+
+        # Restore original mock_llm_api
+        AIChatInterfaceBackend.mock_llm_api = original_mock_llm_api
+
 
 if __name__ == '__main__':
     unittest.main()
