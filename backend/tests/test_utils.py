@@ -41,8 +41,9 @@ class TestEmitFunction(unittest.TestCase):
 
     def test_emit_unknown_outputName(self):
         # Test how emit handles an output_name it doesn't explicitly know.
-        # Based on current implementation, it should return the default structure
-        # and print a warning (though we can't test stdout print here easily).
+        # Based on current implementation, it should return the default
+        # structure and print a warning (though we can't test stdout print
+        # here easily).
         unknown_name = "unknownOutput"
         value = "some value"
         expected_output = {
@@ -51,8 +52,8 @@ class TestEmitFunction(unittest.TestCase):
             "error": False,
         }
         # We are checking that it returns the default structure.
-        # The warning print is a side effect not easily testable in this context
-        # without redirecting stdout or more complex mocking.
+        # The warning print is a side effect not easily testable in this
+        # context without redirecting stdout or more complex mocking.
         self.assertEqual(emit(unknown_name, value), expected_output)
 
     def test_emit_empty_value_responseText(self):

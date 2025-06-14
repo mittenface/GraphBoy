@@ -7,7 +7,8 @@
 # check for the presence of 'backend_class' in manifest.json before
 # attempting to import a backend module.
 
-# Placeholder class (optional, but might prevent AttributeError if registry tries to getattr)
+# Placeholder class (optional, but might prevent AttributeError if registry
+# tries to getattr)
 class DummycomponentBackend:
     def __init__(self, *args, **kwargs):
         print("DummycomponentBackend initialized (placeholder)")
@@ -31,6 +32,11 @@ except ImportError:
 
 if __name__ == '__main__':
     if logger:
-        logger.info("DummyComponent backend placeholder script executed directly.")
+        logger.info(
+            "DummyComponent backend placeholder script executed directly."
+        )
     else:
-        print("DummyComponent backend placeholder script executed directly (logging not available).")
+        print(
+            "DummyComponent backend placeholder script executed directly "
+            "(logging not available)."
+        )
