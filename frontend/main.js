@@ -1,3 +1,19 @@
+// WebSocket connection setup
+const socket = new WebSocket('ws://localhost:8765');
+
+socket.onopen = function(event) {
+  console.log("WebSocket connection established");
+};
+
+socket.onerror = function(event) {
+  console.error("WebSocket error:", event);
+};
+
+socket.onmessage = function(event) {
+  console.log("WebSocket message received:", event.data);
+  // Potentially handle backend responses here
+};
+
 // Initialize Konva stage for main content
 var mainStage = new Konva.Stage({
   container: 'container', // id of container <div>
@@ -134,7 +150,8 @@ if (sidebarDiv) {
       var componentGroup = new Konva.Group({
         x: pointerPosition.x - dummyComponent.width() / 2,
         y: pointerPosition.y - dummyComponent.height() / 2,
-        draggable: true
+        draggable: true,
+        id: 'comp_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9) // Assign unique ID
       });
 
       // Create the rectangle for the component (relative to the group)
@@ -211,8 +228,66 @@ if (sidebarDiv) {
           const endPos = inputPort.getAbsolutePosition(mainStage);
           currentWire.points([currentWire.points()[0], currentWire.points()[1], endPos.x, endPos.y]);
           // Make the line solid upon successful connection
+          currentWire.stroke('dodgerblue');
+          currentWire.strokeWidth(3);
           currentWire.dash([]);
-          connections.push({ from: startPort, to: inputPort, line: currentWire });
+
+          const connectionId = 'conn_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+          const sourceComponentId = startPort.getParent().id();
+          const targetComponentId = inputPort.getParent().id();
+
+          const message = {
+            jsonrpc: "2.0",
+            method: "connection.create",
+            params: {
+              connectionId: connectionId,
+              sourceComponentId: sourceComponentId,
+              sourcePortName: startPort.name(),
+              targetComponentId: targetComponentId,
+              targetPortName: inputPort.name()
+            },
+            id: 'msg_' + Date.now() // Unique ID for the RPC message itself
+          };
+
+          if (socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify(message));
+            console.log("Sent connection.create message:", message);
+          } else {
+            console.error("WebSocket is not open. Cannot send message.");
+          }
+
+          connections.push({ id: connectionId, from: startPort, to: inputPort, line: currentWire });
+
+          const newConnection = connections[connections.length - 1];
+          newConnection.line.on('contextmenu', function(event) {
+            event.evt.preventDefault(); // Prevent default browser context menu
+            if (confirm('Delete this connection?')) {
+              // 1. Send deletion message to backend
+              const deleteMessage = {
+                jsonrpc: "2.0",
+                method: "connection.delete",
+                params: {
+                  connectionId: newConnection.id
+                },
+                id: 'msg_' + Date.now()
+              };
+              if (socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify(deleteMessage));
+                console.log('Sent connection.delete for:', newConnection.id);
+              } else {
+                console.error('WebSocket not open. Cannot send connection.delete');
+              }
+
+              // 2. Remove from frontend
+              newConnection.line.destroy();
+              const index = connections.findIndex(c => c.id === newConnection.id);
+              if (index > -1) {
+                connections.splice(index, 1);
+              }
+              mainLayer.draw();
+            }
+          });
+
           mainLayer.draw();
           isWiring = false;
           currentWire = null;
@@ -261,8 +336,8 @@ if (sidebarDiv) {
         const startPos = startPort.getAbsolutePosition(mainStage);
         currentWire = new Konva.Line({
           points: [startPos.x, startPos.y, startPos.x, startPos.y],
-          stroke: 'dodgerblue', // Styling for the dragged wire
-          strokeWidth: 3,
+          stroke: 'red', // Styling for the dragged wire
+          strokeWidth: 4, // Styling for the dragged wire
           lineCap: 'round',
           lineJoin: 'round',
           dash: [10, 5] // Dashed line for dragging
