@@ -1,4 +1,9 @@
+import uuid
 from typing import Any, Dict
+
+def generate_unique_id() -> str:
+    """Generates a unique string identifier."""
+    return str(uuid.uuid4())
 
 def emit(output_name: str, value: Any) -> Dict[str, Any]:
     """
