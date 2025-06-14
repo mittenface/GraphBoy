@@ -4,67 +4,34 @@ import websockets
 import logging
 import functools
 from backend.component_registry import ComponentRegistry
-from backend.event_bus import EventBus # Added
+from backend.event_bus import EventBus  # Added
 from components.AIChatInterface.backend import AIChatInterfaceBackend as ActualAIChatInterfaceBackend
 
 # Configure basic logging
-# logging.basicConfig(level=logging.DEBUG) # Moved to main() for better control
+# logging.basicConfig(level=logging.DEBUG)  # Moved to main() for better control
 logger = logging.getLogger(__name__)
 
 WS_PORT = 8765
-event_bus_instance = EventBus() # Added
+
+event_bus_instance = EventBus()  # Added
 logger.info(f"Global EventBus instance created: {event_bus_instance}")
 
 # Global registry instance
-component_registry_instance = ComponentRegistry(event_bus=event_bus_instance) # Modified, renamed for clarity
+component_registry_instance = ComponentRegistry(event_bus=event_bus_instance)  # Modified, renamed for clarity
 logger.info(f"Global ComponentRegistry instance created: {component_registry_instance} with EventBus.")
 
-# class AIChatInterfaceBackend(ComponentInterface): # Commenting out the old local class
-#     """
-#     A backend component that interacts with a chat model.
-#     """
-#     def __init__(self, component_id=None):
-#         self.component_id = component_id or generate_unique_id()
-#         self.state = {"status": "initialized", "history": []}
-#         logger.info(f"AIChatInterfaceBackend {self.component_id} initialized.")
-#
-#     async def update(self, inputs: dict) -> dict:
-#         logger.info(f"AIChatInterfaceBackend {self.component_id} update called with inputs: {inputs}")
-#         user_input = inputs.get("userInput")
-#         # Simulate model processing
-#         await asyncio.sleep(0.1) # Simulate async work
-#         response_text = f"Mock response to: {user_input}"
-#
-#         self.state["history"].append({"user": user_input, "assistant": response_text})
-#         self.state["status"] = "updated"
-#
-#         return {
-#             "status": "success",
-#             "componentId": self.component_id,
-#             "responseText": response_text,
-#             "updatedState": self.state
-#         }
-#
-#     def get_state(self) -> dict:
-#         logger.info(f"AIChatInterfaceBackend {self.component_id} get_state called.")
-#         return self.state
-#
-#     def get_component_id(self) -> str:
-#         return self.component_id
-
-# component_registry is now component_registry_instance
-
 # Dictionary to store client WebSocket connections mapping component_id to websocket object
-# This might need rethinking if one websocket can interact with multiple components over time.
-# For now, we'll associate a websocket with the *first* component_id it interacts with for cleanup.
-client_connections: dict[websockets.WebSocketServerProtocol, str] = {} # Store ws -> component_id for cleanup
-active_component_sockets: dict[str, websockets.WebSocketServerProtocol] = {} # Store component_id -> ws for sending
+client_connections: dict[websockets.WebSocketServerProtocol, str] = {}  # Store ws -> component_id for cleanup
+active_component_sockets: dict[str, websockets.WebSocketServerProtocol] = {}  # Store component_id -> ws for sending
 
-async def send_component_output(component_id: str, output_name: str, data: any):
+# Dictionary to store active connections between components
+active_connections: dict[str, dict] = {}
+
+def send_component_output(component_id: str, output_name: str, data: any) -> asyncio.Task:
     """
     Sends a component.emitOutput message to the client via WebSocket.
     """
-    websocket = active_component_sockets.get(component_id) # Changed to use active_component_sockets
+    websocket = active_component_sockets.get(component_id)
     if websocket:
         message = {
             "jsonrpc": "2.0",
@@ -75,198 +42,215 @@ async def send_component_output(component_id: str, output_name: str, data: any):
                 "data": data
             }
         }
-        try:
-            await websocket.send(json.dumps(message))
-            logger.info(f"Sent component.emitOutput for {component_id}: {output_name}")
-        except Exception as e:
-            logger.error(f"Error sending component.emitOutput for {component_id}: {e}", exc_info=True)
+        return asyncio.create_task(_send_message(websocket, message))
     else:
         logger.warning(f"No WebSocket connection found for component_id: {component_id} when trying to emit output: {output_name}")
 
-async def process_request_hook(websocket, path_from_hook: str):
+async def _send_message(websocket, message: dict):
+    try:
+        await websocket.send(json.dumps(message))
+        logger.info(f"Sent component.emitOutput for {message['params']['componentId']}: {message['params']['outputName']}")
+    except Exception as e:
+        logger.error(f"Error sending component.emitOutput for {message['params']['componentId']}: {e}", exc_info=True)
+
+async def process_request_hook(websocket, path: str):
     """
     Hook to capture the request path and attach it to the websocket connection object.
     This is called by websockets.serve for each new connection, before the main handler.
     """
-    logger.debug(f"process_request_hook: path '{path_from_hook}' attached to connection {websocket.id}")
-    websocket.actual_request_path = path_from_hook # Attach the path here
+    logger.debug(f"process_request_hook: path '{path}' attached to connection {getattr(websocket, 'id', 'unknown')}")
+    websocket.actual_request_path = path
 
-async def websocket_handler(websocket: websockets.WebSocketServerProtocol, registry: ComponentRegistry):
+async def handle_connection_create(params: dict) -> dict:
+    """
+    Handles the creation of a new connection between component ports.
+    """
+    connection_id = params.get("connectionId")
+    source_component_id = params.get("sourceComponentId")
+    source_port_name = params.get("sourcePortName")
+    target_component_id = params.get("targetComponentId")
+    target_port_name = params.get("targetPortName")
+
+    if not connection_id:
+        logger.error("connection.create failed: connectionId is required")
+        return {"error": {"code": -32602, "message": "Invalid params: connectionId is required"}}
+
+    logger.info(f"Attempting to create connection: {connection_id} from {source_component_id}:{source_port_name} to {target_component_id}:{target_port_name}")
+
+    details = {
+        "connectionId": connection_id,
+        "sourceComponentId": source_component_id,
+        "sourcePortName": source_port_name,
+        "targetComponentId": target_component_id,
+        "targetPortName": target_port_name,
+        "status": "active"
+    }
+    active_connections[connection_id] = details
+    logger.info(f"Connection {connection_id} created successfully.")
+    return {"status": "success", "message": "Connection created successfully", "connectionId": connection_id}
+
+async def handle_connection_delete(params: dict) -> dict:
+    """
+    Handles the deletion of an existing connection.
+    """
+    connection_id = params.get("connectionId")
+
+    if not connection_id:
+        logger.error("connection.delete failed: connectionId is required")
+        return {"error": {"code": -32602, "message": "Invalid params: connectionId is required"}}
+
+    logger.info(f"Attempting to delete connection: {connection_id}")
+
+    if connection_id in active_connections:
+        del active_connections[connection_id]
+        logger.info(f"Connection {connection_id} deleted successfully.")
+        return {"status": "success", "message": "Connection deleted successfully", "connectionId": connection_id}
+    else:
+        logger.warning(f"Connection {connection_id} not found for deletion.")
+        return {"status": "not_found", "message": "Connection not found", "connectionId": connection_id}
+
+async def websocket_handler(
+    websocket: websockets.WebSocketServerProtocol,
+    registry: ComponentRegistry
+):
     """
     Handles WebSocket connections and routes JSON-RPC requests.
     """
     path = getattr(websocket, 'actual_request_path', '/')
-    logger.info(f"Client connected: {websocket.id} from {websocket.remote_address} on path '{path}'")
+    logger.info(f"Client connected: {getattr(websocket, 'id', 'unknown')} from {websocket.remote_address} on path '{path}'")
 
-    component_id_associated_with_ws: str | None = None
-
+    associated: str | None = None
     try:
         async for message_str in websocket:
-            data = {} # Ensure data is defined for error logging scope
+            data = {}
             try:
                 data = json.loads(message_str)
-                logger.debug(f"WS {websocket.id} received message: {data}")
+                logger.debug(f"WS received message: {data}")
 
-                if "jsonrpc" not in data or data["jsonrpc"] != "2.0":
-                    error_response = {
+                # JSON-RPC 2.0 validation
+                if data.get("jsonrpc") != "2.0":
+                    await websocket.send(json.dumps({
                         "jsonrpc": "2.0",
                         "error": {"code": -32600, "message": "Invalid Request"},
                         "id": data.get("id")
-                    }
-                    await websocket.send(json.dumps(error_response))
+                    }))
                     continue
 
-                request_id = data.get("id")
+                req_id = data.get("id")
                 method = data.get("method")
                 params = data.get("params", {})
+                resp = {"jsonrpc": "2.0", "id": req_id}
+                cid = params.get("componentName")
 
-                response = {"jsonrpc": "2.0", "id": request_id}
-                current_component_id = params.get("componentName") # Used by most component methods
+                # Associate websocket with component
+                if cid and not associated:
+                    associated = cid
+                    client_connections[websocket] = cid
+                    active_component_sockets[cid] = websocket
+                    logger.info(f"Associated WS with component: {cid}")
 
-                if current_component_id:
-                    # Associate this websocket with this component_id if not already done
-                    if not component_id_associated_with_ws:
-                        component_id_associated_with_ws = current_component_id
-                        client_connections[websocket] = current_component_id
-                        logger.info(f"WS {websocket.id} associated with component_id: {current_component_id}")
-
-                    # Update active socket for this component_id
-                    if active_component_sockets.get(current_component_id) != websocket:
-                        active_component_sockets[current_component_id] = websocket
-                        logger.info(f"Active WebSocket for component_id '{current_component_id}' is now {websocket.id}")
-
+                # Route methods
                 if method == "component.updateInput":
                     inputs = params.get("inputs")
-                    if not current_component_id or inputs is None: # Check for None explicitly if inputs can be empty dict
-                        response["error"] = {"code": -32602, "message": "Invalid params for component.updateInput (missing componentName or inputs)"}
+                    if not cid or inputs is None:
+                        resp["error"] = {"code": -32602, "message": "Invalid params for component.updateInput"}
                     else:
-                        instance = registry.get_component_instance(current_component_id)
-                        if instance:
+                        inst = registry.get_component_instance(cid)
+                        if inst:
                             try:
-                                result = await instance.update(inputs)
-                                response["result"] = result
+                                res = await inst.update(inputs)
+                                resp["result"] = res
                             except Exception as e:
-                                logger.error(f"Error during component.updateInput for {current_component_id}: {e}", exc_info=True)
-                                response["error"] = {"code": -32000, "message": f"Server error during update: {str(e)}"}
+                                logger.error(f"Error in update: {e}", exc_info=True)
+                                resp["error"] = {"code": -32000, "message": str(e)}
                         else:
-                            response["error"] = {"code": -32001, "message": f"Component '{current_component_id}' not found"}
+                            resp["error"] = {"code": -32001, "message": f"Component '{cid}' not found"}
 
                 elif method == "component.getState":
-                    if not current_component_id:
-                        response["error"] = {"code": -32602, "message": "Invalid params for component.getState (missing componentName)"}
+                    if not cid:
+                        resp["error"] = {"code": -32602, "message": "Missing componentName for getState"}
                     else:
-                        instance = registry.get_component_instance(current_component_id)
-                        if instance:
+                        inst = registry.get_component_instance(cid)
+                        if inst:
                             try:
-                                response["result"] = instance.get_state()
+                                resp["result"] = inst.get_state()
                             except Exception as e:
-                                logger.error(f"Error during component.getState for {current_component_id}: {e}", exc_info=True)
-                                response["error"] = {"code": -32000, "message": f"Server error during getState: {str(e)}"}
+                                logger.error(f"Error in getState: {e}", exc_info=True)
+                                resp["error"] = {"code": -32000, "message": str(e)}
                         else:
-                            response["error"] = {"code": -32001, "message": f"Component '{current_component_id}' not found"}
-                else:
-                    response["error"] = {"code": -32601, "message": f"Method '{method}' not found"}
+                            resp["error"] = {"code": -32001, "message": f"Component '{cid}' not found"}
 
-                await websocket.send(json.dumps(response))
-                logger.debug(f"WS {websocket.id} sent response: {response}")
+                elif method == "connection.create":
+                    result = await handle_connection_create(params)
+                    if "error" in result:
+                        resp["error"] = result["error"]
+                    else:
+                        resp["result"] = result
+
+                elif method == "connection.delete":
+                    result = await handle_connection_delete(params)
+                    if "error" in result:
+                        resp["error"] = result["error"]
+                    else:
+                        resp["result"] = result
+
+                else:
+                    resp["error"] = {"code": -32601, "message": f"Method '{method}' not found"}
+
+                await websocket.send(json.dumps(resp))
+                logger.debug(f"WS sent response: {resp}")
 
             except json.JSONDecodeError:
-                logger.error(f"WS {websocket.id} failed to decode JSON message: {message_str}", exc_info=True)
-                error_response = {"jsonrpc": "2.0", "error": {"code": -32700, "message": "Parse error"}, "id": None}
-                await websocket.send(json.dumps(error_response))
+                await websocket.send(json.dumps({
+                    "jsonrpc": "2.0",
+                    "error": {"code": -32700, "message": "Parse error"},
+                    "id": None
+                }))
             except Exception as e:
-                logger.error(f"WS {websocket.id} unhandled error in message processing loop: {e}", exc_info=True)
-                error_id = data.get("id") if isinstance(data, dict) else None
-                error_response = {"jsonrpc": "2.0", "error": {"code": -32000, "message": f"Internal server error: {str(e)}"}, "id": error_id}
-                try:
-                    await websocket.send(json.dumps(error_response))
-                except websockets.exceptions.ConnectionClosed:
-                    logger.warning(f"WS {websocket.id} connection closed while trying to send error response.")
-                    break # Exit message loop if connection is closed
-
+                err_id = data.get("id") if isinstance(data, dict) else None
+                await websocket.send(json.dumps({
+                    "jsonrpc": "2.0",
+                    "error": {"code": -32000, "message": f"Internal error: {e}"},
+                    "id": err_id
+                }))
     except websockets.exceptions.ConnectionClosedOK:
-        logger.info(f"WS {websocket.id} client disconnected normally from {websocket.remote_address}.")
-    except websockets.exceptions.ConnectionClosedError as e:
-        logger.warning(f"WS {websocket.id} client disconnected with error from {websocket.remote_address}: {e}")
+        logger.info("Client disconnected cleanly.")
     except Exception as e:
-        logger.error(f"WS {websocket.id} connection handler failed with unexpected error: {e}", exc_info=True)
+        logger.error(f"Connection handler failed: {e}", exc_info=True)
     finally:
-        logger.info(f"WS {websocket.id} connection with {websocket.remote_address} closing.")
-        # Clean up connections
+        # Cleanup
         if websocket in client_connections:
-            associated_cid = client_connections.pop(websocket)
-            logger.info(f"Removed primary association for WS {websocket.id} with component_id: {associated_cid}")
-            # Also remove from active_component_sockets if this was the active socket for that component
-            if active_component_sockets.get(associated_cid) == websocket:
-                active_component_sockets.pop(associated_cid)
-                logger.info(f"Removed WS {websocket.id} as active socket for component_id: {associated_cid}")
-
-        # Fallback: Iterate through active_component_sockets to find and remove this websocket instance if it's still listed anywhere
-        # This handles cases where client_connections might not have been set but active_component_sockets was.
-        extra_cids_to_clear = [cid for cid, ws in active_component_sockets.items() if ws == websocket]
-        for cid_to_clear in extra_cids_to_clear:
-            active_component_sockets.pop(cid_to_clear)
-            logger.info(f"Cleared WS {websocket.id} from active_component_sockets for component_id: {cid_to_clear} during final cleanup.")
-
+            cid = client_connections.pop(websocket)
+            active_component_sockets.pop(cid, None)
+            logger.info(f"Cleaned up WS for component: {cid}")
 
 async def setup_and_start_servers():
-    logger.info("Setting up and starting servers...")
     component_id = "AIChatInterface"
-
-    # Instantiate the actual backend component, now also passing the event_bus
-    chat_backend_instance = ActualAIChatInterfaceBackend(
+    inst = ActualAIChatInterfaceBackend(
         component_id=component_id,
         send_component_output_func=send_component_output,
-        event_bus=event_bus_instance # Added event_bus
+        event_bus=event_bus_instance
     )
-    logger.info(f"Instantiated {component_id} backend: {chat_backend_instance} with EventBus.")
-
-    # Register the component instance with the global registry
     component_registry_instance.register_component(
         name=component_id,
-        component_class=ActualAIChatInterfaceBackend, # Pass the class for potential type checking or metadata
-        instance=chat_backend_instance
+        component_class=ActualAIChatInterfaceBackend,
+        instance=inst
     )
-    logger.info(f"Registered {component_id} with ComponentRegistry.")
-
-    # Use functools.partial to pass the registry to the websocket handler
-    partial_websocket_handler = functools.partial(
-        websocket_handler,
-        registry=component_registry_instance # Use the renamed instance
+    handler = functools.partial(websocket_handler, registry=component_registry_instance)
+    return await websockets.serve(
+        handler, "localhost", WS_PORT,
+        process_request=process_request_hook
     )
-
-    # The process_request hook is called with (websocket, path) by websockets.serve
-    # It will attach the path to the websocket object for the main handler to use.
-    server = await websockets.serve(
-        partial_websocket_handler,
-        "localhost",
-        WS_PORT,
-        process_request=process_request_hook # Pass the hook here
-    )
-    logger.info(f"WebSocket server starting on ws://localhost:{WS_PORT}...")
-    return server
 
 async def main():
-    # Configure basic logging (moved here from global scope)
-    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    logger.info("Application starting...")
-
-    # Discover components from a directory (example)
-    # component_registry_instance.discover_components("components") # If you have such a directory
-    # For now, we are manually registering AIChatInterface
-
+    logging.basicConfig(level=logging.DEBUG,
+                        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     server = await setup_and_start_servers()
+    logger.info(f"WebSocket server running on ws://localhost:{WS_PORT}")
     try:
         await server.wait_closed()
     except KeyboardInterrupt:
-        logger.info("Server shutting down due to KeyboardInterrupt...")
-    except Exception as e:
-        logger.error(f"Server shutdown due to unexpected error: {e}", exc_info=True)
-    finally:
-        if server:
-            server.close()
-            await server.wait_closed()
-        logger.info("Server closed.")
+        pass
 
 if __name__ == "__main__":
     asyncio.run(main())
