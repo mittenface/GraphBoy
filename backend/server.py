@@ -59,9 +59,6 @@ def send_component_output(component_id: str, output_name: str, data: any) -> Non
     # This function no longer exclusively returns the WebSocket send task.
     # Consider if callers relied on this return value. For now, returning None.
 
-# Removed: import websockets.http11, will use duck typing or direct type if available
-# from websockets.http11 import Request as HTTPRequest  # Specific import if needed
-
 async def _send_message(websocket, message: dict):
     try:
         await websocket.send(json.dumps(message))
