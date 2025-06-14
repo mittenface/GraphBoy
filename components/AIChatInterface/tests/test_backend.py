@@ -47,10 +47,10 @@ class TestAIChatInterfaceBackend(unittest.IsolatedAsyncioTestCase): # Inherit fr
 
         self.mock_send_output_func.assert_called_once_with(
             self.test_component_id,
-            "responseStream", # Default mock_llm_api provides responseStream
-            expected_response_stream_content
+            "responseStream",
+            {"streamContent": expected_response_stream_content}
         )
-        self.assertEqual(response, {"status": "success", "message": "Output will be sent via component.emitOutput"})
+        self.assertEqual(response, {"status": "success", "message": "Output processing initiated, will be sent via component.emitOutput"})
 
     async def test_update_with_mock_llm_custom_params_emits_stream(self):
         """Test update method with custom params emits responseStream."""
@@ -67,10 +67,10 @@ class TestAIChatInterfaceBackend(unittest.IsolatedAsyncioTestCase): # Inherit fr
 
         self.mock_send_output_func.assert_called_once_with(
             self.test_component_id,
-            "responseStream", # Default mock_llm_api provides responseStream
-            expected_response_stream_content
+            "responseStream",
+            {"streamContent": expected_response_stream_content}
         )
-        self.assertEqual(response, {"status": "success", "message": "Output will be sent via component.emitOutput"})
+        self.assertEqual(response, {"status": "success", "message": "Output processing initiated, will be sent via component.emitOutput"})
 
     async def test_update_no_input_emits_error(self):
         """Test update method when no userInput is provided emits an error."""
@@ -79,30 +79,31 @@ class TestAIChatInterfaceBackend(unittest.IsolatedAsyncioTestCase): # Inherit fr
         self.mock_send_output_func.assert_called_once_with(
             self.test_component_id,
             "error",
-            "No input provided."
+            {"message": "No userInput provided in inputs."}
         )
-        self.assertEqual(response, {"status": "error", "message": "No input provided, error emitted."})
+        self.assertEqual(response, {"status": "error", "message": "No userInput provided in inputs."}) # Backend now returns the dict here too
 
     async def test_update_emits_error_on_llm_error(self):
         """Test update method emits error if mock_llm_api returns an error."""
         user_input = "Trigger error"
-        # Temporarily patch mock_llm_api to return an error
         original_mock_llm_api = AIChatInterfaceBackend.mock_llm_api
         async def mock_llm_api_error_version(*args, **kwargs):
             return {"error": "Simulated LLM error"}
+
         AIChatInterfaceBackend.mock_llm_api = mock_llm_api_error_version
+        try:
+            response = await self.backend.update({"userInput": user_input})
 
-        response = await self.backend.update({"userInput": user_input})
-
-        self.mock_send_output_func.assert_called_once_with(
-            self.test_component_id,
-            "error",
-            "Simulated LLM error"
-        )
-        self.assertEqual(response, {"status": "success", "message": "Output will be sent via component.emitOutput"})
-
-        # Restore original mock_llm_api
-        AIChatInterfaceBackend.mock_llm_api = original_mock_llm_api
+            self.mock_send_output_func.assert_called_once_with(
+                self.test_component_id,
+                "error",
+                {"message": "Simulated LLM error"}
+            )
+            # The response from update() should indicate success if the error was handled and emitted correctly.
+            self.assertEqual(response, {"status": "success", "message": "Output processing initiated, will be sent via component.emitOutput"})
+        finally:
+            # Restore original mock_llm_api
+            AIChatInterfaceBackend.mock_llm_api = original_mock_llm_api
 
 
 if __name__ == '__main__':
