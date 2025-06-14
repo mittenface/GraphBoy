@@ -9,6 +9,12 @@ var mainStage = new Konva.Stage({
 var mainLayer = new Konva.Layer();
 mainStage.add(mainLayer);
 
+// Global variables for wiring state
+var isWiring = false;
+var currentWire = null;
+var startPort = null;
+var connections = [];
+
 // Create a simple rectangle in the main stage
 var mainRect = new Konva.Rect({
   x: 50,
@@ -25,6 +31,38 @@ mainLayer.add(mainRect);
 
 // Draw the main layer
 mainLayer.draw();
+
+// Event listener on mainStage for mouse movement
+mainStage.on('mousemove', function (e) {
+  if (isWiring && currentWire) {
+    const pos = mainStage.getPointerPosition();
+    currentWire.points([currentWire.points()[0], currentWire.points()[1], pos.x, pos.y]);
+    mainLayer.draw();
+  }
+});
+
+// Event listener on mainStage for mouse up (to cancel wiring)
+mainStage.on('mouseup', function (e) {
+  // Check if the target is not an input port or if not wiring
+  // The input port's mouseup event will handle successful connections.
+  // This handler is for "failed" drops or clicks not starting on an output.
+  if (isWiring && e.target.name() !== 'input') {
+    if (currentWire) {
+      currentWire.destroy(); // Remove the wire
+    }
+    // Reset wiring state
+    isWiring = false;
+    currentWire = null;
+    startPort = null;
+    mainLayer.draw();
+  } else if (!isWiring && currentWire) {
+    // This case might occur if mouseup happens on stage after a successful connection
+    // or if something went wrong. Clean up currentWire if it exists.
+    currentWire.destroy();
+    currentWire = null;
+    mainLayer.draw();
+  }
+});
 
 // Get the sidebar element
 const sidebarDiv = document.getElementById('sidebar');
@@ -142,9 +180,47 @@ if (sidebarDiv) {
         radius: portRadius,
         fill: portFill,
         stroke: portStroke,
-        strokeWidth: portStrokeWidth
+        strokeWidth: portStrokeWidth,
+        name: 'input' // Added name property
       });
       componentGroup.add(inputPort);
+
+      // Input port hover effects
+      inputPort.on('mouseenter', function() {
+        mainStage.container().style.cursor = 'pointer';
+        this.fill('yellow');
+        this.radius(portRadius * 1.2);
+        mainLayer.draw();
+      });
+      inputPort.on('mouseleave', function() {
+        mainStage.container().style.cursor = 'default';
+        this.fill(portFill);
+        this.radius(portRadius);
+        mainLayer.draw();
+      });
+
+      // Event listener for input port
+      inputPort.on('mouseup', function(e) {
+        if (isWiring && startPort && startPort.getParent() !== inputPort.getParent()) {
+          const endPos = inputPort.getAbsolutePosition(mainStage);
+          currentWire.points([currentWire.points()[0], currentWire.points()[1], endPos.x, endPos.y]);
+          // Make the line solid upon successful connection
+          currentWire.dash([]);
+          connections.push({ from: startPort, to: inputPort, line: currentWire });
+          mainLayer.draw();
+          isWiring = false;
+          currentWire = null;
+          startPort = null;
+        } else {
+          if (currentWire) {
+            currentWire.destroy();
+          }
+          isWiring = false;
+          currentWire = null;
+          startPort = null;
+          mainLayer.draw();
+        }
+      });
 
       // Create output port
       var outputPort = new Konva.Circle({
@@ -153,9 +229,41 @@ if (sidebarDiv) {
         radius: portRadius,
         fill: portFill,
         stroke: portStroke,
-        strokeWidth: portStrokeWidth
+        strokeWidth: portStrokeWidth,
+        name: 'output' // Added name property
       });
       componentGroup.add(outputPort);
+
+      // Output port hover effects
+      outputPort.on('mouseenter', function() {
+        mainStage.container().style.cursor = 'pointer';
+        this.fill('yellow');
+        this.radius(portRadius * 1.2);
+        mainLayer.draw();
+      });
+      outputPort.on('mouseleave', function() {
+        mainStage.container().style.cursor = 'default';
+        this.fill(portFill);
+        this.radius(portRadius);
+        mainLayer.draw();
+      });
+
+      // Event listener for output port
+      outputPort.on('mousedown', function(e) {
+        isWiring = true;
+        startPort = outputPort;
+        const startPos = startPort.getAbsolutePosition(mainStage);
+        currentWire = new Konva.Line({
+          points: [startPos.x, startPos.y, startPos.x, startPos.y],
+          stroke: 'dodgerblue', // Styling for the dragged wire
+          strokeWidth: 3,
+          lineCap: 'round',
+          lineJoin: 'round',
+          dash: [10, 5] // Dashed line for dragging
+        });
+        mainLayer.add(currentWire);
+        mainLayer.draw();
+      });
 
       // Add the group to the main layer
       mainLayer.add(componentGroup);
