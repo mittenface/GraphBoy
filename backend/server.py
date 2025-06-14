@@ -86,7 +86,7 @@ async def handle_connection_create(params: dict) -> dict:
         "status": "active"
     }
     active_connections[connection_id] = details
-    logger.info(f"Connection {connection_id} created successfully.")
+    logger.info(f"Connection {connection_id} created and stored: {details}")
     return {"status": "success", "message": "Connection created successfully", "connectionId": connection_id}
 
 async def handle_connection_delete(params: dict) -> dict:
