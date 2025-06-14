@@ -66,13 +66,46 @@ async def _send_message(websocket, message: dict):
     except Exception as e:
         logger.error(f"Error sending component.emitOutput for {message['params']['componentId']}: {e}", exc_info=True)
 
-async def process_request_hook(websocket, path: str):
+async def process_request_hook(websocket, request_param): # Renamed to request_param
     """
     Hook to capture the request path and attach it to the websocket connection object.
     This is called by websockets.serve for each new connection, before the main handler.
+    Ensures websocket.actual_request_path is set to a string path.
     """
-    logger.debug(f"process_request_hook: path '{path}' attached to connection {getattr(websocket, 'id', 'unknown')}")
-    websocket.actual_request_path = path
+    path_to_set: str
+    logger.debug(f"process_request_hook: received request_param: '{request_param}' (type: {type(request_param)}) for connection {getattr(websocket, 'id', 'unknown')}")
+
+    # The websockets documentation for process_request states the second arg is `path: str`.
+    # However, logs from previous runs indicated that `request_param` might be a Request object.
+    # Let's robustly extract the path string.
+
+    # Try to import the specific Request type for isinstance check if possible, otherwise rely on duck typing.
+    RequestObjectType = None
+    try:
+        # Attempt to import the specific type if available and known.
+        # Based on logs, it was websockets.http11.Request.
+        # Note: direct import might fail if library structure changes or is not as expected.
+        from websockets.http11 import Request as HTTP11RequestType
+        RequestObjectType = HTTP11RequestType
+        logger.debug(f"process_request_hook: Successfully imported websockets.http11.Request as HTTP11RequestType.")
+    except ImportError:
+        logger.warning(f"process_request_hook: Could not import websockets.http11.Request. Will rely on duck typing for path extraction.")
+
+    if isinstance(request_param, str):
+        path_to_set = request_param
+        logger.debug(f"process_request_hook: request_param is a string. Setting actual_request_path directly to '{path_to_set}'.")
+    elif RequestObjectType and isinstance(request_param, RequestObjectType) and hasattr(request_param, 'path'):
+        path_to_set = request_param.path
+        logger.warning(f"process_request_hook: request_param is a known Request object (type: {type(request_param)}). Used its .path attribute: '{path_to_set}'.")
+    elif hasattr(request_param, 'path') and isinstance(getattr(request_param, 'path', None), str): # Duck typing for other Request-like objects
+        path_to_set = getattr(request_param, 'path')
+        logger.warning(f"process_request_hook: request_param (type: {type(request_param)}) is not a string but has a .path string attribute. Used .path: '{path_to_set}'.")
+    else:
+        logger.error(f"process_request_hook: request_param is of unexpected type ({type(request_param)}) and does not have a .path string attribute. Defaulting path to '/'. Value: {request_param}")
+        path_to_set = "/"
+
+    websocket.actual_request_path = path_to_set
+    logger.info(f"process_request_hook: websocket.actual_request_path finally set to '{websocket.actual_request_path}' (type: {type(websocket.actual_request_path)})")
 
 async def handle_connection_create(params: dict) -> dict:
     """
@@ -95,10 +128,35 @@ async def handle_connection_create(params: dict) -> dict:
         logger.error("connection.create failed: Missing one or more required parameters.")
         return {"error": {"code": -32602, "message": "Invalid params: Missing required parameters"}}
 
+    # Fetch port details
+    source_port_details = component_registry_instance.get_port_details(source_component_id, source_port_name)
+    target_port_details = component_registry_instance.get_port_details(target_component_id, target_port_name)
+
+    if not source_port_details:
+        logger.error(f"connection.create failed: Source port details not found for {source_component_id}:{source_port_name}")
+        return {"error": {"code": -32004, "message": f"Port details not found for source port {source_component_id}:{source_port_name}."}}
+    if not target_port_details:
+        logger.error(f"connection.create failed: Target port details not found for {target_component_id}:{target_port_name}")
+        return {"error": {"code": -32004, "message": f"Port details not found for target port {target_component_id}:{target_port_name}."}}
+
+    # Validate port types
+    if source_port_details.get("type") != "output":
+        logger.error(f"connection.create failed: Source port {source_component_id}:{source_port_name} is not an output port.")
+        return {"error": {"code": -32003, "message": "Invalid connection: Source port must be an output port."}}
+    if target_port_details.get("type") != "input":
+        logger.error(f"connection.create failed: Target port {target_component_id}:{target_port_name} is not an input port.")
+        return {"error": {"code": -32003, "message": "Invalid connection: Target port must be an input port."}}
+
+    # Validate data types
+    if source_port_details.get("data_type") != target_port_details.get("data_type"):
+        logger.error(f"connection.create failed: Data type mismatch between {source_component_id}:{source_port_name} ({source_port_details.get('data_type')}) and {target_component_id}:{target_port_name} ({target_port_details.get('data_type')}).")
+        return {"error": {"code": -32003, "message": f"Invalid connection: Data type mismatch. Source is '{source_port_details.get('data_type')}', Target is '{target_port_details.get('data_type')}'."}}
+
+    # Check target instance (already part of original logic, kept for clarity though redundant if port lookups succeed)
     target_instance = component_registry_instance.get_component_instance(target_component_id)
-    if not target_instance:
-        logger.error(f"connection.create failed: Target component '{target_component_id}' not found.")
-        return {"error": {"code": -32001, "message": f"Target component '{target_component_id}' not found"}}
+    if not target_instance: # This check might be redundant if get_port_details implies component existence.
+        logger.error(f"connection.create failed: Target component '{target_component_id}' not found (post port validation).")
+        return {"error": {"code": -32001, "message": f"Target component '{target_component_id}' not found."}}
 
     event_name = _get_event_name(source_component_id, source_port_name)
 
@@ -121,7 +179,8 @@ async def handle_connection_create(params: dict) -> dict:
             logger.error(f"Error processing data for connection {connection_id} by {target_component_id}: {e}", exc_info=True)
 
     try:
-        await event_bus_instance.subscribe(event_name, on_data_received)
+        # subscribe is not an async method
+        event_bus_instance.subscribe(event_name, on_data_received)
         logger.info(f"Successfully subscribed to event '{event_name}' for connection {connection_id}")
     except Exception as e:
         logger.error(f"Failed to subscribe to event '{event_name}' for connection {connection_id}: {e}", exc_info=True)
@@ -164,7 +223,8 @@ async def handle_connection_delete(params: dict) -> dict:
 
         if event_name and callback:
             try:
-                await event_bus_instance.unsubscribe(event_name, callback)
+                # unsubscribe is not an async method
+                event_bus_instance.unsubscribe(event_name, callback)
                 logger.info(f"Successfully unsubscribed from event '{event_name}' for connection {connection_id}")
             except Exception as e:
                 logger.error(f"Error unsubscribing from event '{event_name}' for connection {connection_id}: {e}", exc_info=True)
@@ -184,22 +244,46 @@ async def websocket_handler(
     """
     Handles WebSocket connections and routes JSON-RPC requests.
     """
-    path = getattr(websocket, 'actual_request_path', '/')
-    logger.info(f"Client connected: {getattr(websocket, 'id', 'unknown')} from {websocket.remote_address} on path '{path}'")
+    logger.debug(f"websocket_handler: Entered for websocket id {getattr(websocket, 'id', 'unknown')}")
+
+    # process_request_hook is now responsible for ensuring actual_request_path is a string.
+    path_to_use = getattr(websocket, 'actual_request_path', '/')
+
+    # Log what we got. It should be a string.
+    logger.debug(f"websocket_handler: Retrieved websocket.actual_request_path: '{path_to_use}' (type: {type(path_to_use)})")
+
+    if not isinstance(path_to_use, str):
+        # This case should ideally not be reached if process_request_hook is effective.
+        logger.error(f"websocket_handler: CRITICAL - path_to_use from actual_request_path is NOT a string (type: {type(path_to_use)}). Defaulting to '/'. This indicates an issue in process_request_hook.")
+        path_to_use = '/'
+
+    logger.info(f"Client connected: {getattr(websocket, 'id', 'unknown')} from {websocket.remote_address} on effective path '{path_to_use}'")
 
     associated: str | None = None
+    ws_id = getattr(websocket, 'id', 'unknown') # For consistent logging
+
     try:
+        # Associate websocket with component ID as early as possible if path indicates it
+        if path_to_use and path_to_use.startswith("/ws/component/"):
+            potential_cid = path_to_use.split("/ws/component/", 1)[1]
+            if potential_cid:
+                associated = potential_cid
+                client_connections[websocket] = associated
+                active_component_sockets[associated] = websocket
+                logger.info(f"WS {ws_id}: Associated early with component via path: {associated}")
+
+        # Main message processing loop
         async for message_str in websocket:
-            data = {}
+            data = {} # Define data here to have it in scope for broader exception handling if needed
             try:
                 data = json.loads(message_str)
-                logger.debug(f"WS received message: {data}")
+                logger.debug(f"WS {ws_id}: Received message: {data}")
 
-                # JSON-RPC 2.0 validation
                 if data.get("jsonrpc") != "2.0":
+                    logger.warning(f"WS {ws_id}: Invalid JSON-RPC version. Message: {message_str}")
                     await websocket.send(json.dumps({
                         "jsonrpc": "2.0",
-                        "error": {"code": -32600, "message": "Invalid Request"},
+                        "error": {"code": -32600, "message": "Invalid Request: JSON-RPC version must be 2.0"},
                         "id": data.get("id")
                     }))
                     continue
@@ -208,89 +292,113 @@ async def websocket_handler(
                 method = data.get("method")
                 params = data.get("params", {})
                 resp = {"jsonrpc": "2.0", "id": req_id}
-                cid = params.get("componentName")
 
-                # Associate websocket with component
-                if cid and not associated:
-                    associated = cid
-                    client_connections[websocket] = cid
-                    active_component_sockets[cid] = websocket
-                    logger.info(f"Associated WS with component: {cid}")
+                if not method:
+                    logger.warning(f"WS {ws_id}: Missing 'method' in JSON-RPC request. Data: {data}")
+                    if req_id is not None:
+                         resp["error"] = {"code": -32600, "message": "Invalid Request: 'method' is required"}
+                         await websocket.send(json.dumps(resp))
+                    continue
 
-                # Route methods
+                cid_from_params = params.get("componentName") or params.get("componentId")
+                if cid_from_params and not associated:
+                    associated = cid_from_params
+                    if websocket not in client_connections:
+                         client_connections[websocket] = associated
+                         active_component_sockets[associated] = websocket
+                         logger.info(f"WS {ws_id}: Associated with component via message: {associated}")
+                    elif client_connections[websocket] != associated:
+                         logger.warning(f"WS {ws_id}: Tried to re-associate from {client_connections[websocket]} to {associated}. Denied.")
+
+                target_component_id_for_method = associated
+                if method not in ["connection.create", "connection.delete"]:
+                    if not target_component_id_for_method and cid_from_params:
+                        target_component_id_for_method = cid_from_params
+
+                    if not registry.get_component_instance(target_component_id_for_method) and method not in ["component.discover"]:
+                        logger.error(f"WS {ws_id}: Method '{method}' targeted component '{target_component_id_for_method}' which was not found or not associated.")
+                        if req_id is not None:
+                            resp["error"] = {"code": -32001, "message": f"Component '{target_component_id_for_method}' not found for method '{method}'"}
+                            await websocket.send(json.dumps(resp))
+                        continue
+
+                # Method routing logic (simplified for brevity in this diff, assume it's as before)
                 if method == "component.updateInput":
                     inputs = params.get("inputs")
-                    if not cid or inputs is None:
-                        resp["error"] = {"code": -32602, "message": "Invalid params for component.updateInput"}
+                    current_cid_for_op = cid_from_params or associated
+                    if not current_cid_for_op or inputs is None:
+                        resp["error"] = {"code": -32602, "message": "Invalid params for component.updateInput: componentName/Id and inputs required"}
                     else:
-                        inst = registry.get_component_instance(cid)
-                        if inst:
-                            try:
-                                res = await inst.update(inputs)
-                                resp["result"] = res
-                            except Exception as e:
-                                logger.error(f"Error in update: {e}", exc_info=True)
-                                resp["error"] = {"code": -32000, "message": str(e)}
-                        else:
-                            resp["error"] = {"code": -32001, "message": f"Component '{cid}' not found"}
-
+                        inst = registry.get_component_instance(current_cid_for_op)
+                        if inst: resp["result"] = await inst.update(inputs)
+                        else: resp["error"] = {"code": -32001, "message": f"Component instance '{current_cid_for_op}' not found for updateInput"}
                 elif method == "component.getState":
-                    if not cid:
+                    current_cid_for_op = cid_from_params or associated
+                    if not current_cid_for_op:
                         resp["error"] = {"code": -32602, "message": "Missing componentName for getState"}
                     else:
-                        inst = registry.get_component_instance(cid)
-                        if inst:
-                            try:
-                                resp["result"] = inst.get_state()
-                            except Exception as e:
-                                logger.error(f"Error in getState: {e}", exc_info=True)
-                                resp["error"] = {"code": -32000, "message": str(e)}
-                        else:
-                            resp["error"] = {"code": -32001, "message": f"Component '{cid}' not found"}
-
+                        inst = registry.get_component_instance(current_cid_for_op)
+                        if inst: resp["result"] = inst.get_state()
+                        else: resp["error"] = {"code": -32001, "message": f"Component '{current_cid_for_op}' not found for getState"}
                 elif method == "connection.create":
                     result = await handle_connection_create(params)
-                    if "error" in result:
-                        resp["error"] = result["error"]
-                    else:
-                        resp["result"] = result
-
+                    if "error" in result: resp["error"] = result["error"]
+                    else: resp["result"] = result
                 elif method == "connection.delete":
                     result = await handle_connection_delete(params)
-                    if "error" in result:
-                        resp["error"] = result["error"]
-                    else:
-                        resp["result"] = result
-
+                    if "error" in result: resp["error"] = result["error"]
+                    else: resp["result"] = result
                 else:
                     resp["error"] = {"code": -32601, "message": f"Method '{method}' not found"}
 
-                await websocket.send(json.dumps(resp))
-                logger.debug(f"WS sent response: {resp}")
+                if req_id is not None:
+                    await websocket.send(json.dumps(resp))
+                    logger.debug(f"WS {ws_id}: Sent response for req_id {req_id}: {resp}")
+                else:
+                    logger.debug(f"WS {ws_id}: Notification '{method}' received. No response sent.")
 
             except json.JSONDecodeError:
-                await websocket.send(json.dumps({
-                    "jsonrpc": "2.0",
-                    "error": {"code": -32700, "message": "Parse error"},
-                    "id": None
-                }))
-            except Exception as e:
-                err_id = data.get("id") if isinstance(data, dict) else None
-                await websocket.send(json.dumps({
-                    "jsonrpc": "2.0",
-                    "error": {"code": -32000, "message": f"Internal error: {e}"},
-                    "id": err_id
-                }))
+                logger.error(f"WS {ws_id}: JSON Parse error: {message_str[:200]}...", exc_info=True)
+                if websocket.open:
+                    await websocket.send(json.dumps({"jsonrpc": "2.0", "error": {"code": -32700, "message": "Parse error"}, "id": None}))
+                break # Stop processing messages for this connection on parse error
+            except websockets.exceptions.ConnectionClosed: # Catches ConnectionClosedOK and ConnectionClosedError
+                logger.warning(f"WS {ws_id}: Connection closed while processing message or sending response.", exc_info=True)
+                break
+            except Exception as e: # Catch-all for other errors during message processing
+                logger.error(f"WS {ws_id}: Error processing message: {e}", exc_info=True)
+                error_id_for_response = data.get("id") if isinstance(data, dict) and data else None
+                if error_id_for_response is not None and websocket.open:
+                    try:
+                        await websocket.send(json.dumps({
+                            "jsonrpc": "2.0",
+                            "error": {"code": -32000, "message": f"Internal error: {str(e)}"},
+                            "id": error_id_for_response
+                        }))
+                    except websockets.exceptions.ConnectionClosed:
+                        logger.warning(f"WS {ws_id}: Tried to send processing error, but connection already closed.", exc_info=True)
+                # Decide if to break or continue based on error. For most errors, continuing might be risky.
+                # For now, let's break to ensure finally is reached.
+                break
+
+    # Explicitly catch connection closed exceptions outside the loop to ensure logging
     except websockets.exceptions.ConnectionClosedOK:
-        logger.info("Client disconnected cleanly.")
-    except Exception as e:
-        logger.error(f"Connection handler failed: {e}", exc_info=True)
+        logger.info(f"WS {ws_id}: Connection closed cleanly (OK).")
+    except websockets.exceptions.ConnectionClosedError as e:
+        logger.warning(f"WS {ws_id}: Connection closed with error: {e}", exc_info=True)
+    except Exception as e: # Catch-all for errors in websocket_handler's setup or unexpected issues
+        logger.error(f"WS {ws_id}: Handler failed unexpectedly: {e}", exc_info=True)
     finally:
-        # Cleanup
-        if websocket in client_connections:
-            cid = client_connections.pop(websocket)
-            active_component_sockets.pop(cid, None)
-            logger.info(f"Cleaned up WS for component: {cid}")
+        logger.info(f"WS {ws_id}: Entering finally block for cleanup. Associated ID: {associated}")
+        if associated and active_component_sockets.get(associated) == websocket:
+            active_component_sockets.pop(associated, None)
+            logger.info(f"WS {ws_id}: Cleaned up active_component_socket for component: {associated}")
+
+        if client_connections.pop(websocket, None):
+            logger.info(f"WS {ws_id}: Cleaned up client_connection for websocket.")
+        else:
+            logger.debug(f"WS {ws_id}: Websocket not found in client_connections during cleanup.")
+        logger.info(f"WS {ws_id}: Finished cleanup.")
 
 async def setup_and_start_servers():
     component_id = "AIChatInterface"
@@ -305,20 +413,21 @@ async def setup_and_start_servers():
         instance=inst
     )
     handler = functools.partial(websocket_handler, registry=component_registry_instance)
-    return await websockets.serve(
+    server = await websockets.serve(
         handler, "localhost", WS_PORT,
         process_request=process_request_hook
     )
+    logger.info(f"WebSocket server running on ws://localhost:{WS_PORT} (within setup_and_start_servers)")
+    await server.wait_closed() # Keep server running until wait_closed completes
+    return server # Though this will only be returned after server stops
 
 async def main():
     logging.basicConfig(level=logging.DEBUG,
                         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    server = await setup_and_start_servers()
-    logger.info(f"WebSocket server running on ws://localhost:{WS_PORT}")
-    try:
-        await server.wait_closed()
-    except KeyboardInterrupt:
-        pass
+    # setup_and_start_servers now blocks until server is closed.
+    await setup_and_start_servers()
+    logger.info(f"WebSocket server has shut down.")
+
 
 if __name__ == "__main__":
     asyncio.run(main())

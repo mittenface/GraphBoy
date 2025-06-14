@@ -63,6 +63,15 @@ class EventBus:
         else:
             logger.debug(f"No valid tasks to execute for event '{event_type}' after filtering.")
 
+    def clear(self) -> None:
+        """
+        Clears all subscribers from the event bus.
+        Useful for testing or resetting state.
+        """
+        self._subscribers.clear()
+        # self._async_subscribers.clear() # If this was also used, clear it too. Based on current code, only _subscribers is actively used for adding.
+        logger.info("EventBus cleared of all subscribers.")
+
 # Example Usage (can be removed or kept for module testing)
 async def example_listener_1(data):
     logger.info(f"Example Listener 1 received: {data}")
