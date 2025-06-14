@@ -190,12 +190,18 @@ if (sidebarDiv) {
         mainStage.container().style.cursor = 'pointer';
         this.fill('yellow');
         this.radius(portRadius * 1.2);
+        if (isWiring && currentWire) {
+          currentWire.stroke('green');
+        }
         mainLayer.draw();
       });
       inputPort.on('mouseleave', function() {
         mainStage.container().style.cursor = 'default';
         this.fill(portFill);
         this.radius(portRadius);
+        if (isWiring && currentWire) {
+          currentWire.stroke('dodgerblue');
+        }
         mainLayer.draw();
       });
 
