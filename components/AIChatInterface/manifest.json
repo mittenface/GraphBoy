@@ -13,5 +13,6 @@
       {"name": "responseStream", "type": "stream"},
       {"name": "error", "type": "boolean"}
     ]
-  }
+  },
+  "backend_class": "AIChatInterfaceBackend"
 }
