@@ -37,18 +37,49 @@ const AIChatInterface = () => {
           return;
         }
 
-        const { id, result, error: rpcError } = response;
-        const pendingRequest = pendingRequestsRef.current.get(id);
-
-        if (pendingRequest) {
-          if (rpcError) {
-            pendingRequest.reject(rpcError);
+        // Check if it's a component.emitOutput message (server push)
+        if (response.method === "component.emitOutput") {
+          const { componentId, outputName, data } = response.params;
+          // Assuming this component is always "AIChatInterface" for now
+          if (componentId === "AIChatInterface") {
+            if (outputName === "responseText") {
+              setResponseText(data);
+              setIsLoading(false);
+              setIsStreaming(false);
+              setError(null); // Clear previous errors on new data
+            } else if (outputName === "responseStream") {
+              // Assuming stream comes as a whole, not chunks, as per subtask description
+              setResponseText(data);
+              setIsLoading(false);
+              setIsStreaming(false);
+              setError(null);
+            } else if (outputName === "error") {
+              setError(data);
+              setIsLoading(false);
+              setIsStreaming(false);
+              setResponseText(''); // Clear any previous response
+            }
           } else {
-            pendingRequest.resolve(result);
+            console.warn("Received component.emitOutput for unhandled componentId:", componentId);
           }
-          pendingRequestsRef.current.delete(id);
+        }
+        // Else, handle as a regular JSON-RPC response with an ID
+        else if (response.id !== undefined) {
+          const { id, result, error: rpcError } = response;
+          const pendingRequest = pendingRequestsRef.current.get(id);
+
+          if (pendingRequest) {
+            if (rpcError) {
+              pendingRequest.reject(rpcError);
+            } else {
+              pendingRequest.resolve(result);
+            }
+            pendingRequestsRef.current.delete(id);
+          } else {
+            console.warn("Received response for unknown message ID:", id);
+          }
         } else {
-          console.warn("Received response for unknown message ID:", id);
+           console.error("Received message that is not a component.emitOutput and lacks an ID:", response);
         }
       } catch (e) {
         console.error('Error parsing WebSocket message or processing response:', e);
@@ -112,49 +143,66 @@ const AIChatInterface = () => {
     }
 
     setIsLoading(true);
-    setIsStreaming(true); // For UI feedback, like "AI is typing..."
+    setIsStreaming(true); // Indicates waiting for output, e.g., "AI is typing..."
     setError(null);
-    setResponseText('');
+    // setResponseText(''); // Clear previous response, actual content comes via emitOutput
 
     const messageId = generateMessageId();
     const request = {
       jsonrpc: '2.0',
-      method: 'chat',
-      params: { userInput, temperature, maxTokens },
+      method: 'component.updateInput',
+      params: {
+        componentName: "AIChatInterface", // This should match the component ID registered on the backend
+        inputs: { userInput, temperature, maxTokens }
+      },
       id: messageId,
     };
 
     try {
       websocketRef.current.send(JSON.stringify(request));
-      console.log('Sent JSON-RPC request:', request);
+      console.log('Sent JSON-RPC request (component.updateInput):', request);
 
       const responsePromise = new Promise((resolve, reject) => {
         pendingRequestsRef.current.set(messageId, { resolve, reject });
       });
 
-      // Timeout for the request
       const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject({ code: -32003, message: 'Request timed out' }), 30000) // 30s timeout
+        setTimeout(() => reject({ code: -32003, message: 'Request for component.updateInput timed out' }), 30000)
       );
 
       const result = await Promise.race([responsePromise, timeoutPromise]);
-      console.log('JSON-RPC response result:', result);
-      if (result && result.responseText !== undefined) {
-        setResponseText(result.responseText);
+      // The result of component.updateInput is now just an acknowledgment,
+      // e.g., {"status": "success", "message": "Output will be sent via component.emitOutput"}
+      // The actual chat response comes from a component.emitOutput message.
+      console.log('component.updateInput response result:', result);
+      if (result && result.status === "success") {
+        // Successfully initiated the backend processing.
+        // isLoading and isStreaming will be set to false by the component.emitOutput handler.
+        // If no component.emitOutput is received, isLoading/isStreaming might stay true until timeout or error.
+      } else if (result && result.status === "error") {
+        setError(result.message || 'Backend indicated an error with the input.');
+        setIsLoading(false);
+        setIsStreaming(false);
       } else {
-        // This case might indicate a valid JSON-RPC response but not the expected data structure
-        console.warn('Response received, but `responseText` field is missing:', result);
-        setError('Received a response, but it was not in the expected format.');
+         // This case might indicate a valid JSON-RPC response but not the expected data structure
+        console.warn('Response to component.updateInput received, but not in expected format or indicates an issue:', result);
+        // setError('Received an unexpected response from the server for updateInput.');
+        // setIsLoading(false); // Stop loading if response is not as expected
+        // setIsStreaming(false);
+        // Keep isLoading true, as we are still expecting an emitOutput or a timeout/error from it.
       }
       
     } catch (rpcError) {
-      console.error('JSON-RPC Error or Timeout:', rpcError);
-      setError(rpcError.message || 'An error occurred while processing your request.');
-      setResponseText(''); // Clear any partial response
-    } finally {
+      console.error('JSON-RPC Error or Timeout for component.updateInput:', rpcError);
+      setError(rpcError.message || 'An error occurred while sending the request.');
+      setResponseText('');
       setIsLoading(false);
       setIsStreaming(false);
-      pendingRequestsRef.current.delete(messageId); // Clean up, even on timeout
+    } finally {
+      // Note: We don't set isLoading/isStreaming to false here anymore for the success case,
+      // as that's now handled by the component.emitOutput message handler.
+      // It's only set to false here in case of an initial error sending/receiving the updateInput ack.
+      pendingRequestsRef.current.delete(messageId);
     }
   };
 
