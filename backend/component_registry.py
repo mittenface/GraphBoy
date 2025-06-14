@@ -2,7 +2,7 @@ import json
 import importlib
 import logging # Added
 from pathlib import Path
-from typing import Dict, Any, TYPE_CHECKING # Added TYPE_CHECKING
+from typing import Dict, Any, TYPE_CHECKING, List # Added TYPE_CHECKING and List
 
 if TYPE_CHECKING:
     from backend.event_bus import EventBus # Added for type hinting
@@ -36,6 +36,7 @@ class ComponentRegistry:
         self.instances: Dict[str, Any] = {}
         # Added for port details
         self.port_details: Dict[str, Dict[str, Dict[str, str]]] = {}
+        self.component_connections: Dict[str, List[str]] = {}
         self.event_bus = event_bus # Added
         # Added logging
         logger.info(
@@ -251,4 +252,39 @@ class ComponentRegistry:
         self.manifests.clear()
         self.instances.clear()
         self.port_details.clear()
+        self.component_connections.clear()
         logger.info("ComponentRegistry cleared.")
+
+    def add_connection_to_component(self, component_id: str, connection_id: str) -> None:
+        """
+        Adds a connection ID to a component's list of connections.
+        """
+        if component_id not in self.component_connections:
+            self.component_connections[component_id] = []
+        if connection_id not in self.component_connections[component_id]:
+            self.component_connections[component_id].append(connection_id)
+        logger.debug(f"Added connection {connection_id} to component {component_id}")
+
+    def remove_connection_from_component(self, component_id: str, connection_id: str) -> None:
+        """
+        Removes a connection ID from a component's list of connections.
+        If the list becomes empty, the component_id key is removed.
+        """
+        if component_id in self.component_connections:
+            if connection_id in self.component_connections[component_id]:
+                self.component_connections[component_id].remove(connection_id)
+                logger.debug(f"Removed connection {connection_id} from component {component_id}")
+                if not self.component_connections[component_id]: # List is empty
+                    del self.component_connections[component_id]
+                    logger.debug(f"Component {component_id} has no more connections, removed from registry.")
+            else:
+                logger.warning(f"Connection {connection_id} not found for component {component_id} during removal.")
+        else:
+            logger.warning(f"Component {component_id} not found in connection registry during removal of {connection_id}.")
+
+    def get_connections_for_component(self, component_id: str) -> List[str]:
+        """
+        Retrieves the list of connection IDs for a given component.
+        Returns an empty list if the component has no connections or doesn't exist.
+        """
+        return self.component_connections.get(component_id, [])
