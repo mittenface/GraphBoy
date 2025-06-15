@@ -14,7 +14,7 @@ const AIChatInterface = () => {
   const messageIdCounterRef = React.useRef(0);
 
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const WS_URL = `${protocol}//${window.location.hostname}:8080`;
+  const WS_URL = `${protocol}//${window.location.host}`;
 
   React.useEffect(() => {
     console.log('Attempting to connect WebSocket...');
@@ -192,7 +192,7 @@ const AIChatInterface = () => {
         // setIsStreaming(false);
         // Keep isLoading true, as we are still expecting an emitOutput or a timeout/error from it.
       }
-      
+
     } catch (rpcError) {
       console.error('JSON-RPC Error or Timeout for component.updateInput:', rpcError);
       setError(rpcError.message || 'An error occurred while sending the request.');
