@@ -1,0 +1,59 @@
+# Instructions for Replit Agent: Resolving `NameError` in `server.py`
+
+This document outlines a specific issue previously identified in `server.py` and the steps to resolve it.
+
+## Issue: `NameError: name 'logging' is not defined`
+
+**Context:**
+The WebSocket server was failing during the opening handshake. Console logs indicated the following repeating error:
+
+```
+opening handshake failed
+Traceback (most recent call last):
+  File "/home/runner/workspace/.pythonlibs/lib/python3.12/site-packages/websockets/asyncio/server.py", line 356, in conn_handler
+    await connection.handshake(
+  File "/home/runner/workspace/.pythonlibs/lib/python3.12/site-packages/websockets/asyncio/server.py", line 207, in handshake
+    raise self.protocol.handshake_exc
+  File "/home/runner/workspace/.pythonlibs/lib/python3.12/site-packages/websockets/asyncio/server.py", line 149, in handshake
+    response = await response
+               ^^^^^^^^^^^^^^
+  File "/home/runner/workspace/server.py", line 35, in process_request_hook  # Line number may vary slightly
+    logger = logging.getLogger(__name__)
+             ^^^^^^^
+NameError: name 'logging' is not defined. Did you forget to import 'logging'
+```
+
+This error occurred because the `process_request_hook` function in `server.py` attempted to use `logging.getLogger(__name__)` without the `logging` module being imported in that file.
+
+## Action for Replit Agent:
+
+To resolve the `NameError` and ensure the WebSocket handshake can proceed without this specific crash, please perform the following modification to the `server.py` file:
+
+1.  **Ensure `server.py` is being edited.**
+2.  **Add the following import statement at the beginning of the `server.py` file, typically grouped with other standard library imports:**
+
+    ```python
+    import logging
+    ```
+
+**Example of where to add the import:**
+
+```python
+import http.server
+import socketserver
+import json
+from urllib.parse import urlparse
+import asyncio
+import websockets
+import threading
+import functools
+from pathlib import Path
+import logging  # <--- ADD THIS LINE HERE
+
+from backend.component_registry import ComponentRegistry
+# ... rest of the file
+```
+
+This will make the `logging` module and its functions available for use within `server.py`, specifically resolving the `NameError` in the `process_request_hook`.
+
+**Note:** This change addresses the `NameError` specifically. Other configurations related to Replit's proxy behavior and dual HTTP/WebSocket server setup should be handled as per previous discussions or Replit Agent's broader recommendations for the application structure.
