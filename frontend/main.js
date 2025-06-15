@@ -1,8 +1,9 @@
 // WebSocket connection setup
 console.log('[WebSocket] Setting up WebSocket connection...');
 const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-const wsHost = window.location.host; // Correctly uses the host (which includes port if non-standard, but for Replit public URL, it's fine)
-const wsUrl = `${wsProtocol}//${wsHost}`; // NO /ws SUFFIX
+const wsHost = window.location.hostname; // Get hostname without port
+const wsPort = 8080; // WebSocket server port
+const wsUrl = `${wsProtocol}//${wsHost}:${wsPort}`;
 
 console.log(`[WebSocket] Attempting to connect to: ${wsUrl}`);
 const socket = new WebSocket(wsUrl);
