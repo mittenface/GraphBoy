@@ -4,10 +4,19 @@ modules = ["python-3.12", "nodejs-20", "web"]
 channel = "stable-24_05"
 
 [workflows]
-runButton = "Preview App"
+runButton = "Run App"
 
 [[workflows.workflow]]
 name = "Preview App"
+author = 21618820
+mode = "sequential"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python server.py"
+
+[[workflows.workflow]]
+name = "Run App"
 author = 21618820
 mode = "sequential"
 
