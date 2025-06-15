@@ -330,7 +330,14 @@ async def main():
             )
 
     if AIChatInterfaceBackend:
-        backend_instance_main = AIChatInterfaceBackend()
+        # Define a mock send function for the main scope
+        def mock_send_output(component_id, output_name, data):
+            print(f"Output from {component_id}: {output_name} = {data}")
+        
+        backend_instance_main = AIChatInterfaceBackend(
+            component_id="main_chat_instance", 
+            send_component_output_func=mock_send_output
+        )
         print("AIChatInterfaceBackend initialized for main.")
     else:
         print(
