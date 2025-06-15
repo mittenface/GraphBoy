@@ -50,6 +50,30 @@ async def process_request_hook(server_connection, request):
         f"'{server_connection.actual_request_path}' (type: {type(server_connection.actual_request_path)})"
     )
 
+async def enhanced_process_request_hook(server_connection, request):
+    """
+    Enhanced process_request hook that logs detailed information about
+    invalid WebSocket upgrade requests for debugging purposes.
+    """
+    try:
+        # Call the original process_request_hook functionality
+        await process_request_hook(server_connection, request)
+    except Exception as e:
+        # Log detailed information about the failed request
+        logger = logging.getLogger(__name__)
+        logger.error(
+            f"WebSocket upgrade failed - Enhanced logging:\n"
+            f"  Exception: {type(e).__name__}: {e}\n"
+            f"  Remote Address: {getattr(server_connection, 'remote_address', 'unknown')}\n"
+            f"  Request Path: {getattr(request, 'path', 'unknown')}\n"
+            f"  Request Headers: {dict(getattr(request, 'headers', {}))}\n"
+            f"  User-Agent: {getattr(request, 'headers', {}).get('User-Agent', 'not provided')}\n"
+            f"  Origin: {getattr(request, 'headers', {}).get('Origin', 'not provided')}\n"
+            f"  Connection: {getattr(request, 'headers', {}).get('Connection', 'missing - this is likely the issue')}\n"
+            f"  Upgrade: {getattr(request, 'headers', {}).get('Upgrade', 'not provided')}"
+        )
+        raise  # Re-raise the exception to maintain original behavior
+
 class CustomHandler(http.server.SimpleHTTPRequestHandler):
     chat_backend = None
 
@@ -292,7 +316,7 @@ async def setup_and_start_servers():
         bound_websocket_handler,
         "0.0.0.0",
         WS_PORT,
-        process_request=process_request_hook # Added process_request_hook
+        process_request=enhanced_process_request_hook # Use enhanced hook for debugging
     )
 
     print(f"HTTP Server configured for http://0.0.0.0:{PORT}")
@@ -391,7 +415,7 @@ async def main():
         bound_websocket_handler_main,
         "0.0.0.0",
         WS_PORT,
-        process_request=process_request_hook # Added process_request_hook
+        process_request=enhanced_process_request_hook # Use enhanced hook for debugging
     )
 
     print(f"HTTP Server starting at http://0.0.0.0:{PORT} (from main)")

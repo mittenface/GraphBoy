@@ -630,6 +630,29 @@ async def websocket_handler(
             )
         logger.info(f"WS {ws_id}: Finished cleanup.")
 
+async def enhanced_process_request_hook(websocket, request):
+    """
+    Enhanced process_request hook that logs detailed information about
+    invalid WebSocket upgrade requests for debugging purposes.
+    """
+    try:
+        # Call the original process_request_hook functionality
+        await process_request_hook(websocket, request)
+    except Exception as e:
+        # Log detailed information about the failed request
+        logger.error(
+            f"WebSocket upgrade failed - Enhanced logging:\n"
+            f"  Exception: {type(e).__name__}: {e}\n"
+            f"  Remote Address: {getattr(websocket, 'remote_address', 'unknown')}\n"
+            f"  Request Path: {getattr(request, 'path', 'unknown')}\n"
+            f"  Request Headers: {dict(getattr(request, 'headers', {}))}\n"
+            f"  User-Agent: {getattr(request, 'headers', {}).get('User-Agent', 'not provided')}\n"
+            f"  Origin: {getattr(request, 'headers', {}).get('Origin', 'not provided')}\n"
+            f"  Connection: {getattr(request, 'headers', {}).get('Connection', 'missing - this is likely the issue')}\n"
+            f"  Upgrade: {getattr(request, 'headers', {}).get('Upgrade', 'not provided')}"
+        )
+        raise  # Re-raise the exception to maintain original behavior
+
 async def setup_and_start_servers():
     component_id = "AIChatInterface"
     inst = ActualAIChatInterfaceBackend(
@@ -651,11 +674,11 @@ async def setup_and_start_servers():
     try:
         server = await websockets.serve(
             handler, "", WS_PORT,
-            process_request=process_request_hook, ssl=None  # Use None for http in replit
+            process_request=enhanced_process_request_hook, ssl=None  # Use enhanced hook
         )
         logger.info(
             f"WebSocket server running on ws://localhost:{WS_PORT} "
-            f"(within setup_and_start_servers)"
+            f"(within setup_and_start_servers) with enhanced error logging"
         )
     except Exception as e:
         logger.error(f"Failed to start WebSocket server: {e}", exc_info=True)
