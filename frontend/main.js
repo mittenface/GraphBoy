@@ -348,6 +348,25 @@ if (sidebarDiv) {
 
       // Add the group to the main layer
       mainLayer.add(componentGroup);
+
+      // Add dragmove event listener to the componentGroup
+      componentGroup.on('dragmove', function() {
+        const draggedComponent = this; // 'this' refers to componentGroup
+        connections.forEach(connection => {
+          // Check if the wire starts from the dragged component
+          if (connection.from.getParent().id() === draggedComponent.id()) {
+            const startPortAbsPos = connection.from.getAbsolutePosition(mainStage);
+            connection.line.points([startPortAbsPos.x, startPortAbsPos.y, connection.line.points()[2], connection.line.points()[3]]);
+          }
+          // Check if the wire ends at the dragged component
+          if (connection.to.getParent().id() === draggedComponent.id()) {
+            const endPortAbsPos = connection.to.getAbsolutePosition(mainStage);
+            connection.line.points([connection.line.points()[0], connection.line.points()[1], endPortAbsPos.x, endPortAbsPos.y]);
+          }
+        });
+        mainLayer.draw();
+      });
+
       mainLayer.draw(); // Ensure this is called after all additions
       console.log("New component group with ports created on main stage.");
     } else {
