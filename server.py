@@ -17,6 +17,7 @@ except ImportError:
     AIChatInterfaceBackend = None
 
 PORT = 5000
+WS_PORT = 5000
 
 # New: WebSocket process_request_hook
 async def process_request_hook(websocket, path_from_hook):
@@ -329,14 +330,7 @@ async def main():
             )
 
     if AIChatInterfaceBackend:
-        # Define a placeholder send function for the main backend instance
-        async def placeholder_send_output(component_id, output_name, data):
-            print(f"Placeholder send output: {component_id} -> {output_name}: {data}")
-        
-        backend_instance_main = AIChatInterfaceBackend(
-            component_id="main_chat_backend",
-            send_component_output_func=placeholder_send_output
-        )
+        backend_instance_main = AIChatInterfaceBackend()
         print("AIChatInterfaceBackend initialized for main.")
     else:
         print(
@@ -348,13 +342,6 @@ async def main():
     CustomHandler.chat_backend = backend_instance_main
 
     # HTTP Server Setup (similar to setup_and_start_servers)
-    # Use the backend/server.py WebSocket server instead of creating a duplicate
-    from backend.server import setup_and_start_servers as backend_setup
-    
-    print(f"HTTP Server starting at http://0.0.0.0:{PORT} (from main)")
-    print("Starting backend WebSocket server...")
-    
-    # Setup HTTP server only
     httpd_main = socketserver.TCPServer(("0.0.0.0", PORT), CustomHandler,
                                         bind_and_activate=False)
     httpd_main.allow_reuse_address = True
@@ -363,13 +350,30 @@ async def main():
     http_server_thread_main = threading.Thread(target=httpd_main.serve_forever,
                                                name="HTTPThreadMain")
     http_server_thread_main.daemon = True
+
+    # WebSocket Server Setup (similar to setup_and_start_servers)
+    # Important: Use the registry and backend instance specific to this main's scope
+    bound_websocket_handler_main = functools.partial(
+        websocket_handler,
+        chat_backend=backend_instance_main,
+        registry=registry_main
+    )
+
+    ws_server_instance_main = await websockets.serve(
+        bound_websocket_handler_main,
+        "0.0.0.0",
+        WS_PORT,
+        process_request=process_request_hook # Added process_request_hook
+    )
+
+    print(f"HTTP Server starting at http://0.0.0.0:{PORT} (from main)")
+    print(
+        f"WebSocket Server starting at ws://0.0.0.0:{WS_PORT} (from main) with path hook"
+    )
+
     http_server_thread_main.start()
     print("HTTP server thread started (from main).")
-    
-    # Start the backend WebSocket server
-    ws_server_instance_main = await backend_setup()
-    
-    print("Application startup complete from main. Servers are running...")
+    print("Application startup complete from main. Servers are starting...")
 
     try:
         if ws_server_instance_main:
@@ -382,11 +386,8 @@ async def main():
         print("KeyboardInterrupt received in main, shutting down...")
     finally:
         print("Main loop ending, initiating server shutdown (from main)...")
-        if httpd_main:
-            httpd_main.server_close()
-        if ws_server_instance_main:
-            ws_server_instance_main.close()
-            await ws_server_instance_main.wait_closed()
+        await stop_servers(httpd_main, http_server_thread_main,
+                           ws_server_instance_main)
 
 if __name__ == '__main__':
     # Note: The setup_and_start_servers() is primarily for tests or external

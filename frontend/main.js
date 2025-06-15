@@ -1,17 +1,31 @@
-// WebSocket connection setup  
-const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-const socket = new WebSocket(`${protocol}//${window.location.hostname}:8080`);
+// WebSocket connection setup
+console.log('[WebSocket] Setting up WebSocket connection...');
+const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+const wsHost = window.location.host; // Correctly uses the host (which includes port if non-standard, but for Replit public URL, it's fine)
+const wsUrl = `${wsProtocol}//${wsHost}`; // NO /ws SUFFIX
+
+console.log(`[WebSocket] Attempting to connect to: ${wsUrl}`);
+const socket = new WebSocket(wsUrl);
 
 socket.onopen = function(event) {
-  console.log("WebSocket connection established");
+  console.log('[WebSocket] Connection OPENED:', event);
 };
 
 socket.onerror = function(event) {
-  console.error("WebSocket error:", event);
+  console.error('[WebSocket] Error:', event);
+};
+
+socket.onclose = function(event) {
+  console.log('[WebSocket] Connection CLOSED:', event);
+  if (event.wasClean) {
+    console.log(`[WebSocket] Closed cleanly, code=${event.code}, reason=${event.reason}`);
+  } else {
+    console.error('[WebSocket] Connection died (e.g., server process killed or network down)');
+  }
 };
 
 socket.onmessage = function(event) {
-  console.log("WebSocket message received:", event.data);
+  console.log('[WebSocket] Message received:', event.data);
   // Potentially handle backend responses here
 };
 
