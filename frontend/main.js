@@ -25,10 +25,309 @@ socket.onclose = function(event) {
   }
 };
 
+// Debounce utility function
+function debounce(func, wait) {
+    let timeout;
+    return function executedFunction(...args) {
+        const later = () => {
+            clearTimeout(timeout);
+            func(...args);
+        };
+        clearTimeout(timeout);
+        timeout = setTimeout(later, wait);
+    };
+}
+
 socket.onmessage = function(event) {
   console.log('[WebSocket] Message received:', event.data);
-  // Potentially handle backend responses here
+  try {
+    const parsedMessage = JSON.parse(event.data);
+    console.log('[WebSocket] Parsed message:', parsedMessage);
+
+    if (parsedMessage.method === "v1.connection.load") { // Versioned
+      if (parsedMessage.params) {
+        renderLoadedConnection(parsedMessage.params);
+      } else {
+        console.error('[WebSocket] v1.connection.load message received without params:', parsedMessage);
+      }
+    }
+    // Potentially handle other backend responses here, e.g., component.emitOutput
+    else if (parsedMessage.method === "component.emitOutput") {
+        // Example: Find component and update its visual state or display data
+        const componentId = parsedMessage.params.componentId;
+        const outputName = parsedMessage.params.outputName;
+        const data = parsedMessage.params.data;
+        console.log(`[WebSocket] Received component.emitOutput for ${componentId} - ${outputName}:`, data);
+
+        // Find the component on the stage
+        const componentGroup = mainStage.findOne('#' + componentId);
+        if (componentGroup) {
+            // Find a text node within the component to display the data, or create one
+            let dataDisplay = componentGroup.findOne('.data-display');
+            if (!dataDisplay) {
+                dataDisplay = new Konva.Text({
+                    x: 5, // Adjust position as needed
+                    y: componentGroup.findOne('Rect').height() + 5, // Below the main rect
+                    text: `Output ${outputName}: ${JSON.stringify(data)}`,
+                    fontSize: 10,
+                    fill: 'black',
+                    name: 'data-display' // For potential future updates
+                });
+                componentGroup.add(dataDisplay);
+            } else {
+                dataDisplay.text(`Output ${outputName}: ${JSON.stringify(data)}`);
+            }
+            mainLayer.draw();
+        } else {
+            console.warn(`[WebSocket] Component ${componentId} not found on stage to display output.`);
+        }
+    }
+    // Handle connection.created event from server (broadcast from another client)
+    else if (parsedMessage.method === "v1.connection.created") { // Versioned
+        console.log('[WebSocket] Received v1.connection.created:', parsedMessage.params);
+        if (connections.has(parsedMessage.params.connectionId)) {
+            console.log(`[WebSocket] Connection ${parsedMessage.params.connectionId} already exists (likely self-echo). Ignoring v1.connection.created.`);
+        } else {
+            // Attempt to render the connection. renderLoadedConnection handles queuing if components aren't ready.
+            const success = renderLoadedConnection(parsedMessage.params);
+            if (success) {
+                console.log(`[WebSocket] Live connection ${parsedMessage.params.connectionId} created successfully.`);
+            } else {
+                console.log(`[WebSocket] Live connection ${parsedMessage.params.connectionId} queued or failed to render immediately.`);
+            }
+        }
+    }
+    // Handle connection.removed event from server (broadcast from another client)
+    else if (parsedMessage.method === "v1.connection.removed") { // Versioned
+        console.log('[WebSocket] Received v1.connection.removed:', parsedMessage.params);
+        const connectionIdToRemove = parsedMessage.params.connectionId;
+        const connEntry = connections.get(connectionIdToRemove);
+
+        if (connEntry) {
+            if (connEntry.line) {
+                connEntry.line.destroy();
+            }
+            connections.delete(connectionIdToRemove);
+            mainLayer.draw();
+            console.log(`[WebSocket] Live connection ${connectionIdToRemove} removed successfully via v1.connection.removed.`);
+        } else {
+            console.warn(`[WebSocket] Could not find connection ${connectionIdToRemove} to remove (already removed or never existed here) via v1.connection.removed.`);
+        }
+    }
+
+  } catch (error) {
+    console.error('[WebSocket] Error parsing message or handling method:', error, event.data);
+  }
 };
+
+function createWire({ id, fromPort, toPort }) {
+  const logPrefix = `[createWire](${id}):`;
+  console.log(`${logPrefix} Creating wire from ${fromPort.getParent().id()}:${fromPort.name()} to ${toPort.getParent().id()}:${toPort.name()}.`);
+
+  const sourcePos = fromPort.getAbsolutePosition();
+  const targetPos = toPort.getAbsolutePosition();
+
+  if (!sourcePos || !targetPos) {
+    console.error(`${logPrefix} Could not get absolute positions for ports. Source:`, sourcePos, "Target:", targetPos);
+    return null; // Cannot create wire
+  }
+
+  const wire = new Konva.Line({
+    id: id,
+    points: [sourcePos.x, sourcePos.y, targetPos.x, targetPos.y],
+    stroke: 'dodgerblue',
+    strokeWidth: 3,
+    lineCap: 'round',
+    lineJoin: 'round'
+    // dash: [] // Solid line for committed connections
+  });
+
+  mainLayer.add(wire);
+  wire.moveToBottom(); // Ensure wires are behind components
+
+  connections.set(id, { // Changed for Map
+    id: id,
+    from: fromPort,
+    to: toPort,
+    line: wire
+  });
+
+  wire.on('contextmenu', function(event) {
+    event.evt.preventDefault();
+    if (confirm('Delete this connection?')) {
+      const deleteMessage = {
+        jsonrpc: "2.0",
+        method: "v1.connection.delete", // Versioned
+        params: { connectionId: id }, // Use the id from closure
+        id: 'msg_delete_' + Date.now()
+      };
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify(deleteMessage));
+        console.log(`${logPrefix} Sent connection.delete for: ${id}`);
+      } else {
+        console.error(`${logPrefix} WebSocket not open. Cannot send connection.delete for ${id}`);
+      }
+
+      // connections.delete(id) is the primary Map operation.
+      // The wire object (this) is already available from the event.
+      if (connections.has(id)) {
+          connections.delete(id);
+          console.log(`${logPrefix} Connection ${id} removed from Map.`);
+      } else {
+          console.warn(`${logPrefix} Connection ${id} not found in Map for deletion.`);
+      }
+      wire.destroy(); // Destroy the line itself (wire is 'this' Konva.Line here)
+      mainLayer.draw(); // Redraw after deleting and destroying
+      console.log(`${logPrefix} Connection visual line ${id} deleted from frontend.`);
+    }
+  });
+
+  mainLayer.draw(); // Draw the layer to show the new wire
+  console.log(`${logPrefix} Wire created and stored.`);
+  return wire;
+}
+
+function renderLoadedConnection(params, isRetry = false) {
+  const logPrefix = `[renderLoadedConnection${isRetry ? '-retry' : ''}](${params.connectionId}):`;
+  console.log(`${logPrefix} Attempting to render.`);
+
+  const sourceComponent = mainStage.findOne('#' + params.sourceComponentId);
+  const targetComponent = mainStage.findOne('#' + params.targetComponentId);
+
+  if (!sourceComponent || !targetComponent) {
+    if (!sourceComponent) console.warn(`${logPrefix} Source component ${params.sourceComponentId} not found.`);
+    if (!targetComponent) console.warn(`${logPrefix} Target component ${params.targetComponentId} not found.`);
+
+    const alreadyQueued = pendingConnections.find(p => p.connectionId === params.connectionId);
+    if (!alreadyQueued) {
+        console.log(`${logPrefix} Queuing connection.`);
+        pendingConnections.push(JSON.parse(JSON.stringify(params))); // Store a deep copy
+    } else {
+        // console.log(`${logPrefix} Connection already in queue.`); // Can be noisy, uncomment if needed
+    }
+    return false;
+  }
+
+  // Updated source port lookup
+  const sourceOutputPortNodes = sourceComponent.find(node => node.name() === params.sourcePortName && node.getClassName() === 'Circle');
+  const sourceOutputPort = sourceOutputPortNodes.length > 0 ? sourceOutputPortNodes.toArray()[0] : null;
+
+  // Updated target port lookup
+  const targetInputPortNodes = targetComponent.find(node => node.name() === params.targetPortName && node.getClassName() === 'Circle');
+  const targetInputPort = targetInputPortNodes.length > 0 ? targetInputPortNodes.toArray()[0] : null;
+
+  if (!sourceOutputPort || !targetInputPort) {
+    if (!sourceOutputPort) console.warn(`${logPrefix} Source port Circle named '${params.sourcePortName}' in ${params.sourceComponentId} not found.`);
+    if (!targetInputPort) console.warn(`${logPrefix} Target port Circle named '${params.targetPortName}' in ${params.targetComponentId} not found.`);
+
+    const alreadyQueued = pendingConnections.find(p => p.connectionId === params.connectionId);
+    if (!alreadyQueued) {
+        console.log(`${logPrefix} Queuing connection due to missing ports.`);
+        pendingConnections.push(JSON.parse(JSON.stringify(params))); // Store a deep copy
+    } else {
+        // console.log(`${logPrefix} Connection already in queue (port issue).`);  // Can be noisy
+    }
+    return false;
+  }
+
+  const sourcePortPos = sourceOutputPort.getAbsolutePosition(); // Changed: No argument
+  const targetPortPos = targetInputPort.getAbsolutePosition(); // Changed: No argument
+
+  if (!sourcePortPos || !targetPortPos) {
+      console.error(`${logPrefix} Could not get absolute positions for ports. Source:`, sourcePortPos, "Target:", targetPortPos);
+      return false; // Don't queue, this is an unexpected error if components/ports were found
+  }
+
+  // If we're here, components and ports are found. Remove from pending if it was a retry.
+  const pendingIndex = pendingConnections.findIndex(p => p.connectionId === params.connectionId);
+  if (pendingIndex > -1) {
+    pendingConnections.splice(pendingIndex, 1);
+    console.log(`${logPrefix} Removed successfully rendered connection from pending queue.`);
+  }
+
+  // Prevent re-rendering if line already exists (e.g. from a previous attempt / race condition)
+  // Check Konva state AND our map state.
+  const konvaLineExists = mainStage.findOne('#' + params.connectionId);
+  const mapEntryExists = connections.has(params.connectionId);
+
+  if (konvaLineExists) {
+      console.warn(`${logPrefix} Line with ID ${params.connectionId} already exists on stage.`);
+      if (!mapEntryExists) {
+           console.warn(`${logPrefix} Line was on stage but not in connections Map. Adding to Map now.`);
+           // This implies an inconsistency; ideally, createWire should be the sole source of truth for adding to both.
+           // However, to robustly handle, we can add it here.
+           connections.set(params.connectionId, { // Changed for Map
+                id: params.connectionId,
+                from: sourceOutputPort, // These ports are already found
+                to: targetInputPort,
+                line: konvaLineExists // Use the existing Konva line
+            });
+      }
+      return true; // Considered "handled" if the line is on stage.
+  }
+  // If map entry exists but Konva line doesn't, it's an inconsistency.
+  // For now, we'll proceed to createWire which will overwrite the map entry if needed.
+  if (mapEntryExists && !konvaLineExists) {
+      console.warn(`${logPrefix} Connection ${params.connectionId} exists in Map but not on stage. Proceeding to recreate.`);
+  }
+
+
+  // Create the wire using the new helper function
+  const wire = createWire({
+    id: params.connectionId,
+    fromPort: sourceOutputPort,
+    toPort: targetInputPort
+    // isInitialLoad: true // This param is not currently used by createWire but could be passed
+  });
+
+  if (wire) {
+    console.log(`${logPrefix} Wire creation successful via createWire.`);
+    return true; // Successfully rendered
+  } else {
+    console.error(`${logPrefix} Wire creation failed via createWire.`);
+    // Potentially re-queue or handle error, though createWire logs its own errors.
+    // For now, if createWire returns null, it means positions couldn't be found, which
+    // should have been caught by earlier checks in this function.
+    return false;
+  }
+}
+
+function processPendingConnections() {
+  let successfullyRenderedCount = 0;
+  const connectionIdsToRetry = pendingConnections.map(p => p.connectionId);
+
+  if (connectionIdsToRetry.length === 0) {
+    // console.log('[processPendingConnections] No pending connections to process.'); // Can be noisy
+    return;
+  }
+
+  console.log(`[processPendingConnections] Attempting to process ${connectionIdsToRetry.length} pending connection(s):`, connectionIdsToRetry);
+
+  // Iterate over a copy of the IDs, as renderLoadedConnection might modify pendingConnections
+  connectionIdsToRetry.forEach(connectionId => {
+    const params = pendingConnections.find(p => p.connectionId === connectionId);
+    if (params) { // Check if it wasn't already processed and removed by a previous call in this loop
+      if (renderLoadedConnection(params, true)) { // Pass true for isRetry
+        successfullyRenderedCount++;
+        // renderLoadedConnection now handles removing from pendingConnections on success
+      }
+    }
+  });
+
+  if (successfullyRenderedCount > 0) {
+    console.log(`[processPendingConnections] Successfully rendered ${successfullyRenderedCount} connection(s) from queue.`);
+    mainLayer.draw();
+  } else {
+    const remaining = pendingConnections.length;
+    if (remaining > 0) {
+        console.log(`[processPendingConnections] No pending connections were rendered in this pass. ${remaining} still pending.`);
+    } else {
+        console.log('[processPendingConnections] No pending connections rendered, and queue is now empty.');
+    }
+  }
+}
+
+const debouncedProcessPendingConnections = debounce(processPendingConnections, 16); // ~60fps
 
 // Initialize Konva stage for main content
 var mainStage = new Konva.Stage({
@@ -45,7 +344,8 @@ mainStage.add(mainLayer);
 var isWiring = false;
 var currentWire = null;
 var startPort = null;
-var connections = [];
+var connections = new Map(); // Changed for Map
+var pendingConnections = []; // For connections whose components aren't loaded yet
 
 // Create a simple rectangle in the main stage
 var mainRect = new Konva.Rect({
@@ -63,6 +363,16 @@ mainLayer.add(mainRect);
 
 // Draw the main layer
 mainLayer.draw();
+
+// Event listener for when nodes are added to the stage (or layers within it)
+// This is used to trigger pending connection processing when new components are added.
+mainStage.on('add', function(evt) {
+    // Check if the added node is a component group and is added to mainLayer
+    if (evt.target && evt.target.name() === 'component_group' && evt.target.getLayer() === mainLayer) {
+        console.log('[mainStage "add" event] Component group added to mainLayer:', evt.target.id(), '. Calling debouncedProcessPendingConnections.');
+        debouncedProcessPendingConnections(); // Changed to use debounced version
+    }
+});
 
 // Event listener on mainStage for mouse movement
 mainStage.on('mousemove', function (e) {
@@ -173,7 +483,8 @@ if (sidebarDiv) {
         x: pointerPosition.x - dummyComponent.width() / 2,
         y: pointerPosition.y - dummyComponent.height() / 2,
         draggable: true,
-        id: 'comp_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9) // Assign unique ID
+        id: 'comp_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9), // Assign unique ID
+        name: 'component_group' // <-- Add this line
       });
 
       // Create the rectangle for the component (relative to the group)
@@ -249,83 +560,71 @@ if (sidebarDiv) {
         console.log('[input mouseup] Triggered. isWiring:', isWiring, 'startPort:', startPort);
         console.log('[input mouseup] Condition check: isWiring=', isWiring, 'startPort exists=', !!startPort, 'parents different=', startPort ? startPort.getParent() !== inputPort.getParent() : 'N/A');
         if (isWiring && startPort && startPort.getParent() !== inputPort.getParent()) {
-          const endPos = inputPort.getAbsolutePosition(mainStage);
-          console.log('[input mouseup] Successful connection block. endPos:', JSON.stringify(endPos));
-          currentWire.points([currentWire.points()[0], currentWire.points()[1], endPos.x, endPos.y]);
-          // Make the line solid upon successful connection
-          currentWire.stroke('dodgerblue');
-          currentWire.strokeWidth(3);
-          currentWire.dash([]);
+          // Successfully completed a new wire connection interactively
+          console.log('[input mouseup] Successful connection attempt.');
+
+          if (currentWire) {
+            currentWire.destroy(); // Destroy the temporary dashed line
+            console.log('[input mouseup] Destroyed temporary currentWire.');
+          }
 
           const connectionId = 'conn_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
           const sourceComponentId = startPort.getParent().id();
-          const targetComponentId = inputPort.getParent().id();
+          const targetComponentId = inputPort.getParent().id(); // 'this' is the inputPort Konva.Circle
 
-          const message = {
-            jsonrpc: "2.0",
-            method: "connection.create",
-            params: {
-              connectionId: connectionId,
-              sourceComponentId: sourceComponentId,
-              sourcePortName: startPort.name(),
-              targetComponentId: targetComponentId,
-              targetPortName: inputPort.name()
-            },
-            id: 'msg_' + Date.now() // Unique ID for the RPC message itself
-          };
-
-          if (socket.readyState === WebSocket.OPEN) {
-            socket.send(JSON.stringify(message));
-            console.log("Sent connection.create message:", message);
-          } else {
-            console.error("WebSocket is not open. Cannot send message.");
-          }
-
-          connections.push({ id: connectionId, from: startPort, to: inputPort, line: currentWire });
-
-          const newConnection = connections[connections.length - 1];
-          newConnection.line.on('contextmenu', function(event) {
-            event.evt.preventDefault(); // Prevent default browser context menu
-            if (confirm('Delete this connection?')) {
-              // 1. Send deletion message to backend
-              const deleteMessage = {
-                jsonrpc: "2.0",
-                method: "connection.delete",
-                params: {
-                  connectionId: newConnection.id
-                },
-                id: 'msg_' + Date.now()
-              };
-              if (socket.readyState === WebSocket.OPEN) {
-                socket.send(JSON.stringify(deleteMessage));
-                console.log('Sent connection.delete for:', newConnection.id);
-              } else {
-                console.error('WebSocket not open. Cannot send connection.delete');
-              }
-
-              // 2. Remove from frontend
-              newConnection.line.destroy();
-              const index = connections.findIndex(c => c.id === newConnection.id);
-              if (index > -1) {
-                connections.splice(index, 1);
-              }
-              mainLayer.draw();
-            }
+          // Create the permanent wire using the helper function
+          const newWireObject = createWire({
+            id: connectionId,
+            fromPort: startPort, // The output port where dragging started
+            toPort: inputPort    // The input port where dragging ended
           });
 
-          mainLayer.draw();
+          if (newWireObject) {
+            console.log(`[input mouseup] Permanent wire ${connectionId} created via createWire.`);
+            // Send message to backend
+            const message = {
+              jsonrpc: "2.0",
+              method: "v1.connection.create", // Versioned
+              params: {
+                connectionId: connectionId,
+                sourceComponentId: sourceComponentId,
+                sourcePortName: startPort.name(),
+                targetComponentId: targetComponentId,
+                targetPortName: inputPort.name()
+              },
+              id: 'msg_create_' + Date.now()
+            };
+
+            if (socket.readyState === WebSocket.OPEN) {
+              socket.send(JSON.stringify(message));
+              console.log("[input mouseup] Sent connection.create message:", message);
+            } else {
+              console.error("[input mouseup] WebSocket is not open. Cannot send connection.create message.");
+              // Optionally, remove the wire if backend communication fails? Or queue message?
+              // For now, keeping it on frontend.
+            }
+          } else {
+            console.error(`[input mouseup] Failed to create permanent wire for ${connectionId}.`);
+            // mainLayer.draw() might be needed if createWire failed early and didn't draw
+          }
+
+          // Reset wiring state
           isWiring = false;
           currentWire = null;
           startPort = null;
+          // mainLayer.draw() is called by createWire, so not strictly needed here unless createWire fails.
+          // However, createWire calls draw, so if it fails, the temp wire is already gone.
+
         } else {
-          console.log('[input mouseup] Failed connection or self-connection block.');
-          if (currentWire) {
+          console.log('[input mouseup] Failed connection or self-connection attempt.');
+          if (currentWire) { // If wiring failed, destroy the temporary wire
             currentWire.destroy();
+            console.log('[input mouseup] Destroyed temporary currentWire due to failed connection.');
           }
           isWiring = false;
           currentWire = null;
           startPort = null;
-          mainLayer.draw();
+          mainLayer.draw(); // Draw to remove the temp wire if nothing else changed
         }
       });
 
@@ -399,6 +698,7 @@ if (sidebarDiv) {
 
       mainLayer.draw(); // Ensure this is called after all additions
       console.log("New component group with ports created on main stage.");
+
     } else {
       console.log(`Drop position (main stage relative): X=${pointerPosition.x}, Y=${pointerPosition.y} - Outside main stage bounds.`);
     }
