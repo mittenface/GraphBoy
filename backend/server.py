@@ -2,7 +2,14 @@ import asyncio
 import json
 import websockets
 import logging
+import sys
+from pathlib import Path
 from typing import Dict
+
+# Add project root to Python path
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
+
 from shared_types.connection import Connection
 import functools
 from backend.component_registry import ComponentRegistry
