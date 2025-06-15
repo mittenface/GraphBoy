@@ -19,15 +19,35 @@ except ImportError:
 PORT = 5000
 WS_PORT = 8080
 
-# New: WebSocket process_request_hook
-async def process_request_hook(websocket, path_from_hook):
+async def process_request_hook(server_connection, request):
     """
-    Hook to capture the request path and attach it to the websocket
-    connection object.
+    Custom process_request hook for the websockets server.
+
+    This hook is called for each incoming WebSocket request and allows us to:
+    1. Log request details for debugging
+    2. Extract and store the request path on the websocket object
+    3. Optionally return a custom HTTP response (we don't do this here)
+
+    Args:
+        server_connection: The WebSocket server connection object
+        request: The HTTP request object containing headers and path
     """
-    # print(f"Process_request_hook: Path '{path_from_hook}' for {websocket.remote_address}")
-    websocket.actual_request_path = path_from_hook
-    return None # No additional headers
+    logger = logging.getLogger(__name__)
+    logger.info(
+        f"process_request_hook: received request: "
+        f"'{request}' (type: {type(request)})"
+    )
+
+    # Extract the path from the Request object
+    path_to_set = request.path
+    logger.info(f"process_request_hook: extracted path '{path_to_set}' from Request object")
+
+    # Store the request path on the server_connection object for later use
+    server_connection.actual_request_path = path_to_set
+    logger.info(
+        f"process_request_hook: server_connection.actual_request_path finally set to "
+        f"'{server_connection.actual_request_path}' (type: {type(server_connection.actual_request_path)})"
+    )
 
 class CustomHandler(http.server.SimpleHTTPRequestHandler):
     chat_backend = None
@@ -333,7 +353,7 @@ async def main():
         # Define a mock send function for the main scope
         def mock_send_output(component_id, output_name, data):
             print(f"Output from {component_id}: {output_name} = {data}")
-        
+
         backend_instance_main = AIChatInterfaceBackend(
             component_id="main_chat_instance", 
             send_component_output_func=mock_send_output
@@ -430,7 +450,7 @@ logger = logging.getLogger(__name__)
 class CustomHTTPRequestHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=".", **kwargs)
-    
+
     def end_headers(self):
         self.send_header('Cache-Control', 'no-cache')
         super().end_headers()
@@ -450,16 +470,16 @@ async def main():
     http_thread = threading.Thread(target=start_http_server, daemon=True)
     http_thread.start()
     logger.info("HTTP server thread started (from main).")
-    
+
     # Start WebSocket server
     logger.info("WebSocket Server starting at ws://0.0.0.0:8080 (from main) with path hook")
     ws_server = await setup_and_start_servers()
     if ws_server is None:
         logger.error("WebSocket server failed to start. Exiting.")
         return
-    
+
     logger.info("Application startup complete from main. Servers are starting...")
-    
+
     # Wait for WebSocket server to close
     await ws_server.wait_closed()
     logger.info("WebSocket server has shut down.")
