@@ -7,6 +7,7 @@ import websockets
 import threading
 import functools # Added for functools.partial
 from pathlib import Path
+import logging
 
 from backend.component_registry import ComponentRegistry
 
