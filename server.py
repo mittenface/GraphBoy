@@ -406,3 +406,63 @@ if __name__ == '__main__':
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Application shutdown (from __main__).")
+import asyncio
+import logging
+import sys
+from pathlib import Path
+from http.server import HTTPServer, SimpleHTTPRequestHandler
+import threading
+import os
+
+# Add project root to Python path
+project_root = Path(__file__).parent
+sys.path.insert(0, str(project_root))
+
+from backend.server import setup_and_start_servers
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+class CustomHTTPRequestHandler(SimpleHTTPRequestHandler):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, directory=".", **kwargs)
+    
+    def end_headers(self):
+        self.send_header('Cache-Control', 'no-cache')
+        super().end_headers()
+
+def start_http_server():
+    """Start HTTP server for frontend files on port 5000"""
+    try:
+        os.chdir(str(project_root))  # Ensure we're in the right directory
+        httpd = HTTPServer(("0.0.0.0", 5000), CustomHTTPRequestHandler)
+        logger.info("HTTP Server starting at http://0.0.0.0:5000 (from main)")
+        httpd.serve_forever()
+    except Exception as e:
+        logger.error(f"HTTP server failed: {e}")
+
+async def main():
+    # Start HTTP server in a separate thread
+    http_thread = threading.Thread(target=start_http_server, daemon=True)
+    http_thread.start()
+    logger.info("HTTP server thread started (from main).")
+    
+    # Start WebSocket server
+    logger.info("WebSocket Server starting at ws://0.0.0.0:8080 (from main) with path hook")
+    ws_server = await setup_and_start_servers()
+    if ws_server is None:
+        logger.error("WebSocket server failed to start. Exiting.")
+        return
+    
+    logger.info("Application startup complete from main. Servers are starting...")
+    
+    # Wait for WebSocket server to close
+    await ws_server.wait_closed()
+    logger.info("WebSocket server has shut down.")
+
+if __name__ == "__main__":
+    asyncio.run(main())
