@@ -52,18 +52,23 @@ mainLayer.draw();
 mainStage.on('mousemove', function (e) {
   if (isWiring && currentWire) {
     const pos = mainStage.getPointerPosition();
+    console.log('[stage mousemove] pos:', JSON.stringify(pos));
     currentWire.points([currentWire.points()[0], currentWire.points()[1], pos.x, pos.y]);
+    console.log('[stage mousemove] currentWire points updated:', JSON.stringify(currentWire.points()));
+    console.log('[stage mousemove] About to draw mainLayer.');
     mainLayer.draw();
   }
 });
 
 // Event listener on mainStage for mouse up (to cancel wiring)
 mainStage.on('mouseup', function (e) {
+  console.log('[stage mouseup] Triggered. isWiring:', isWiring, 'target name:', e.target.name());
   // Check if the target is not an input port or if not wiring
   // The input port's mouseup event will handle successful connections.
   // This handler is for "failed" drops or clicks not starting on an output.
   if (isWiring && e.target.name() !== 'input') {
     if (currentWire) {
+      console.log('[stage mouseup] Wiring cancelled on stage. Destroying currentWire.');
       currentWire.destroy(); // Remove the wire
     }
     // Reset wiring state
@@ -74,6 +79,7 @@ mainStage.on('mouseup', function (e) {
   } else if (!isWiring && currentWire) {
     // This case might occur if mouseup happens on stage after a successful connection
     // or if something went wrong. Clean up currentWire if it exists.
+    console.log('[stage mouseup] Cleanup: !isWiring but currentWire exists. Destroying currentWire.');
     currentWire.destroy();
     currentWire = null;
     mainLayer.draw();
@@ -224,8 +230,11 @@ if (sidebarDiv) {
 
       // Event listener for input port
       inputPort.on('mouseup', function(e) {
+        console.log('[input mouseup] Triggered. isWiring:', isWiring, 'startPort:', startPort);
+        console.log('[input mouseup] Condition check: isWiring=', isWiring, 'startPort exists=', !!startPort, 'parents different=', startPort ? startPort.getParent() !== inputPort.getParent() : 'N/A');
         if (isWiring && startPort && startPort.getParent() !== inputPort.getParent()) {
           const endPos = inputPort.getAbsolutePosition(mainStage);
+          console.log('[input mouseup] Successful connection block. endPos:', JSON.stringify(endPos));
           currentWire.points([currentWire.points()[0], currentWire.points()[1], endPos.x, endPos.y]);
           // Make the line solid upon successful connection
           currentWire.stroke('dodgerblue');
@@ -293,6 +302,7 @@ if (sidebarDiv) {
           currentWire = null;
           startPort = null;
         } else {
+          console.log('[input mouseup] Failed connection or self-connection block.');
           if (currentWire) {
             currentWire.destroy();
           }
@@ -335,6 +345,7 @@ if (sidebarDiv) {
         isWiring = true;
         startPort = outputPort;
         const startPos = startPort.getAbsolutePosition(mainStage);
+        console.log('[output mousedown] startPos:', JSON.stringify(startPos));
         currentWire = new Konva.Line({
           points: [startPos.x, startPos.y, startPos.x, startPos.y],
           stroke: 'red', // Styling for the dragged wire
@@ -343,7 +354,9 @@ if (sidebarDiv) {
           lineJoin: 'round',
           dash: [10, 5] // Dashed line for dragging
         });
+        console.log('[output mousedown] currentWire created:', currentWire);
         mainLayer.add(currentWire);
+        console.log('[output mousedown] About to draw mainLayer.');
         mainLayer.draw();
       });
 
@@ -370,7 +383,6 @@ if (sidebarDiv) {
 
       mainLayer.draw(); // Ensure this is called after all additions
       console.log("New component group with ports created on main stage.");
-
     } else {
       console.log(`Drop position (main stage relative): X=${pointerPosition.x}, Y=${pointerPosition.y} - Outside main stage bounds.`);
     }
