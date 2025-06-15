@@ -397,6 +397,16 @@ mainStage.on('mouseup', function (e) {
       console.log('[stage mouseup] Wiring cancelled on stage. Destroying currentWire.');
       currentWire.destroy(); // Remove the wire
     }
+
+    // Add this before resetting isWiring, currentWire, startPort
+    if (startPort) { // Check if startPort is defined
+        const sourceComponentGroup = startPort.getParent();
+        if (sourceComponentGroup) {
+            sourceComponentGroup.draggable(true);
+            console.log('[stage mouseup] Re-enabled dragging for source component:', sourceComponentGroup.id(), 'due to wiring cancellation.');
+        }
+    }
+
     // Reset wiring state
     isWiring = false;
     currentWire = null;
@@ -608,6 +618,13 @@ if (sidebarDiv) {
             // mainLayer.draw() might be needed if createWire failed early and didn't draw
           }
 
+          // Add this before resetting isWiring, currentWire, startPort
+          const sourceComponentGroup = startPort.getParent();
+          if (sourceComponentGroup) {
+              sourceComponentGroup.draggable(true);
+              console.log('[input mouseup] Re-enabled dragging for source component:', sourceComponentGroup.id());
+          }
+
           // Reset wiring state
           isWiring = false;
           currentWire = null;
@@ -621,6 +638,16 @@ if (sidebarDiv) {
             currentWire.destroy();
             console.log('[input mouseup] Destroyed temporary currentWire due to failed connection.');
           }
+
+          // Add this logic:
+          if (startPort) { // Check if startPort is defined (it should be if isWiring was true)
+              const sourceComponentGroup = startPort.getParent();
+              if (sourceComponentGroup) {
+                  sourceComponentGroup.draggable(true);
+                  console.log('[input mouseup][failure path] Re-enabled dragging for source component:', sourceComponentGroup.id());
+              }
+          }
+
           isWiring = false;
           currentWire = null;
           startPort = null;
@@ -658,7 +685,15 @@ if (sidebarDiv) {
       outputPort.on('mousedown', function(e) {
         e.evt.stopPropagation(); // Prevent event bubbling to the component group
         isWiring = true;
-        startPort = outputPort;
+        startPort = outputPort; // <<< EXISTING LINE
+
+        // Add this:
+        const componentGroup = startPort.getParent();
+        if (componentGroup) {
+            componentGroup.draggable(false);
+            console.log('[output mousedown] Disabled dragging for component:', componentGroup.id());
+        }
+        // ... rest of the function
         const startPos = startPort.getAbsolutePosition(mainStage);
         console.log('[output mousedown] startPos:', JSON.stringify(startPos));
         currentWire = new Konva.Line({
