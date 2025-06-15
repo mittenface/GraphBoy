@@ -17,7 +17,7 @@ except ImportError:
     AIChatInterfaceBackend = None
 
 PORT = 5000
-WS_PORT = 5000
+WS_PORT = 8080
 
 # New: WebSocket process_request_hook
 async def process_request_hook(websocket, path_from_hook):

@@ -4,7 +4,7 @@ modules = ["python-3.12", "nodejs-20", "web"]
 channel = "stable-24_05"
 
 [workflows]
-runButton = "Run App"
+runButton = "Run Backend Server"
 
 [[workflows.workflow]]
 name = "Preview App"
@@ -23,6 +23,15 @@ mode = "sequential"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "python server.py"
+
+[[workflows.workflow]]
+name = "Run Backend Server"
+author = 21618820
+mode = "sequential"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python backend/server.py"
 
 [[ports]]
 localPort = 5000
