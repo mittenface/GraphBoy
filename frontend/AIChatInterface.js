@@ -14,7 +14,7 @@ const AIChatInterface = () => {
   const messageIdCounterRef = React.useRef(0);
 
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const WS_URL = `${protocol}//${window.location.hostname}:5001`;
+  const WS_URL = `${protocol}//${window.location.hostname}:8080`;
 
   React.useEffect(() => {
     console.log('Attempting to connect WebSocket...');

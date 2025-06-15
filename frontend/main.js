@@ -1,6 +1,6 @@
-// WebSocket connection setup
+// WebSocket connection setup  
 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-const socket = new WebSocket(`${protocol}//${window.location.hostname}:5001`);
+const socket = new WebSocket(`${protocol}//${window.location.hostname}:8080`);
 
 socket.onopen = function(event) {
   console.log("WebSocket connection established");

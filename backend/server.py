@@ -13,7 +13,7 @@ from components.AIChatInterface.backend import AIChatInterfaceBackend as ActualA
 # logging.basicConfig(level=logging.DEBUG)  # Moved to main() for better control
 logger = logging.getLogger(__name__)
 
-WS_PORT = 8765
+WS_PORT = 8080  # Modified to 8080 as per provided change
 
 event_bus_instance = EventBus()  # Added
 logger.info(f"Global EventBus instance created: {event_bus_instance}")
@@ -637,14 +637,23 @@ async def setup_and_start_servers():
     )
     handler = functools.partial(websocket_handler,
                                 registry=component_registry_instance)
-    server = await websockets.serve(
-        handler, "localhost", WS_PORT,
-        process_request=process_request_hook
-    )
-    logger.info(
-        f"WebSocket server running on ws://localhost:{WS_PORT} "
-        f"(within setup_and_start_servers)"
-    )
+    # Ensure correct host for Replit and use wss
+    # Host should be '' for Replit to bind to the correct address.  If running locally
+    # change to localhost.
+    # In a Replit environment, you should use wss, but locally ws is fine.
+    try:
+        server = await websockets.serve(
+            handler, "", WS_PORT,
+            process_request=process_request_hook, ssl=None  # Use None for http in replit
+        )
+        logger.info(
+            f"WebSocket server running on ws://localhost:{WS_PORT} "
+            f"(within setup_and_start_servers)"
+        )
+    except Exception as e:
+        logger.error(f"Failed to start WebSocket server: {e}", exc_info=True)
+        return None  # Exit if server cannot start
+
     # await server.wait_closed() # Removed: This would block until server stops
     return server
 
@@ -654,7 +663,11 @@ async def main():
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
     # setup_and_start_servers now blocks until server is closed.
-    await setup_and_start_servers()
+    server = await setup_and_start_servers()
+    if server is None:
+        logger.error("WebSocket server failed to start. Exiting.")
+        return  # Exit if server startup failed
+    await server.wait_closed()
     logger.info("WebSocket server has shut down.")
 
 
