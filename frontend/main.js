@@ -331,6 +331,7 @@ if (sidebarDiv) {
 
       // Event listener for output port
       outputPort.on('mousedown', function(e) {
+        e.evt.stopPropagation(); // Prevent event bubbling to the component group
         isWiring = true;
         startPort = outputPort;
         const startPos = startPort.getAbsolutePosition(mainStage);
@@ -369,6 +370,7 @@ if (sidebarDiv) {
 
       mainLayer.draw(); // Ensure this is called after all additions
       console.log("New component group with ports created on main stage.");
+
     } else {
       console.log(`Drop position (main stage relative): X=${pointerPosition.x}, Y=${pointerPosition.y} - Outside main stage bounds.`);
     }
