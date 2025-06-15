@@ -43,6 +43,9 @@ active_component_sockets: dict[str, websockets.WebSocketServerProtocol] = {}
 # Dictionary to store active connections between components
 active_connections: Dict[str, Connection] = {}
 
+# Global set to keep track of all connected WebSocket clients
+global_connected_websockets = set() # elements are websockets.WebSocketServerProtocol
+
 # Return type changed, returns None if only publishing
 def send_component_output(component_id: str, output_name: str, data: any) -> None:
     """
@@ -83,14 +86,25 @@ def send_component_output(component_id: str, output_name: str, data: any) -> Non
 async def _send_message(websocket, message: dict):
     try:
         await websocket.send(json.dumps(message))
-        logger.info(
-            f"Sent component.emitOutput for {message['params']['componentId']}: "
-            f"{message['params']['outputName']}"
-        )
+        # Generic logging for successful send
+        method = message.get("method", "unknown_method")
+        params = message.get("params", {})
+        log_identifier = ""
+        if method == "component.emitOutput":
+            log_identifier = f" for {params.get('componentId', 'unknown_component')}: {params.get('outputName', 'unknown_output')}"
+        elif method == "connection.load":
+            log_identifier = f" for connection ID {params.get('connectionId', 'unknown_connection')}"
+        logger.info(f"Sent message with method '{method}'{log_identifier}")
     except Exception as e:
+        method = message.get("method", "unknown_method")
+        params = message.get("params", {})
+        log_identifier = ""
+        if method == "component.emitOutput":
+            log_identifier = f" for {params.get('componentId', 'unknown_component')}"
+        elif method == "connection.load":
+            log_identifier = f" for connection ID {params.get('connectionId', 'unknown_connection')}"
         logger.error(
-            f"Error sending component.emitOutput for "
-            f"{message['params']['componentId']}: {e}", exc_info=True
+            f"Error sending message with method '{method}'{log_identifier}: {e}", exc_info=True
         )
 
 async def process_request_hook(websocket, request_param): # Renamed to request_param
@@ -169,7 +183,7 @@ async def process_request_hook(websocket, request_param): # Renamed to request_p
         f"'{websocket.actual_request_path}' (type: {type(websocket.actual_request_path)})"
     )
 
-async def handle_connection_create(params: dict) -> dict:
+async def handle_connection_create(params: dict, originating_websocket=None) -> dict:
     """
     Handles the creation of a new connection between component ports.
     """
@@ -335,7 +349,27 @@ async def handle_connection_create(params: dict) -> dict:
     # Add connection to component registry
     component_registry_instance.add_connection_to_component(source_component_id, connection_id)
     component_registry_instance.add_connection_to_component(target_component_id, connection_id)
-    logger.info(f"Connection {connection_id} created, stored, and registered with components.")
+    logger.info(f"Connection {connection_id} created, stored, and registered with components by client: {getattr(originating_websocket, 'id', 'unknown')}.")
+
+    # Broadcast connection.created event to other clients
+    connection_created_message = {
+        "jsonrpc": "2.0",
+        "method": "v1.connection.created", # Versioned
+        "params": {
+            "connectionId": details["connection_id"],
+            "sourceComponentId": details["source_component_id"],
+            "sourcePortName": details["source_port_name"],
+            "targetComponentId": details["target_component_id"],
+            "targetPortName": details["target_port_name"]
+        }
+    }
+    logger.info(f"Broadcasting connection.created for {details['connection_id']} (originator: {getattr(originating_websocket, 'id', 'unknown')}).")
+    for ws_client in global_connected_websockets:
+        if ws_client is originating_websocket: # Changed: Direct object comparison
+            continue
+        asyncio.create_task(_send_message(ws_client, connection_created_message))
+        logger.debug(f"Sent connection.created for {details['connection_id']} to client {getattr(ws_client, 'id', 'unknown')}")
+
     return {"status": "success",
             "message": "Connection created successfully",
             "connectionId": connection_id}
@@ -344,11 +378,20 @@ def _get_event_name(source_component_id: str, source_port_name: str) -> str:
     """Helper function to define the event naming convention."""
     return f"component_output::{source_component_id}::{source_port_name}"
 
-async def handle_connection_delete(params: dict) -> dict:
+async def handle_connection_delete(params: dict, originating_websocket=None) -> dict:
     """
     Handles the deletion of an existing connection.
     """
-    connection_id = params.get("connectionId")
+    connection_id_to_delete = params.get("connectionId")
+
+    if not connection_id_to_delete:
+        logger.error("connection.delete failed: connectionId is required")
+        return {"error": {"code": -32602,
+                          "message": "Invalid params: connectionId is required"}}
+
+    logger.info(f"Attempting to delete connection: {connection_id_to_delete} by client: {getattr(originating_websocket, 'id', 'unknown')}")
+
+    connection_details = active_connections.get(connection_id_to_delete)
 
     if not connection_id:
         logger.error("connection.delete failed: connectionId is required")
@@ -382,19 +425,33 @@ async def handle_connection_delete(params: dict) -> dict:
                 # Optionally, still proceed to delete the connection or handle error
 
         # Remove connection from component registry
-        component_registry_instance.remove_connection_from_component(source_component_id, connection_id)
-        component_registry_instance.remove_connection_from_component(target_component_id, connection_id)
+        component_registry_instance.remove_connection_from_component(source_component_id, connection_id_to_delete)
+        component_registry_instance.remove_connection_from_component(target_component_id, connection_id_to_delete)
 
-        del active_connections[connection_id]
-        logger.info(f"Connection {connection_id} deleted, unsubscribed, and removed from components.")
+        del active_connections[connection_id_to_delete]
+        logger.info(f"Connection {connection_id_to_delete} deleted, unsubscribed, and removed from components.")
+
+        # Broadcast connection.removed event to other clients
+        connection_removed_message = {
+            "jsonrpc": "2.0",
+            "method": "v1.connection.removed", # Versioned
+            "params": {"connectionId": connection_id_to_delete}
+        }
+        logger.info(f"Broadcasting connection.removed for {connection_id_to_delete} (originator: {getattr(originating_websocket, 'id', 'unknown')}).")
+        for ws_client in global_connected_websockets:
+            if ws_client is originating_websocket: # Changed: Direct object comparison
+                continue
+            asyncio.create_task(_send_message(ws_client, connection_removed_message))
+            logger.debug(f"Sent connection.removed for {connection_id_to_delete} to client {getattr(ws_client, 'id', 'unknown')}")
+
         return {"status": "success",
                 "message": "Connection deleted successfully",
-                "connectionId": connection_id}
+                "connectionId": connection_id_to_delete}
     else:
-        logger.warning(f"Connection {connection_id} not found for deletion.")
+        logger.warning(f"Connection {connection_id_to_delete} not found for deletion.")
         return {"status": "not_found",
                 "message": "Connection not found",
-                "connectionId": connection_id}
+                "connectionId": connection_id_to_delete}
 
 async def websocket_handler(
     websocket: websockets.WebSocketServerProtocol,
@@ -431,6 +488,26 @@ async def websocket_handler(
         f"Client connected: {getattr(websocket, 'id', 'unknown')} from "
         f"{websocket.remote_address} on effective path '{path_to_use}'"
     )
+    global_connected_websockets.add(websocket)
+    logger.info(f"WS {getattr(websocket, 'id', 'unknown')}: Added to global_connected_websockets. Total: {len(global_connected_websockets)}")
+
+    # Send existing connections to the newly connected client
+    if active_connections:
+        logger.info(f"Sending {len(active_connections)} existing connection(s) to client {getattr(websocket, 'id', 'unknown')}")
+        for conn_id, conn_details in active_connections.items():
+            connection_load_message = {
+                "jsonrpc": "2.0",
+                "method": "v1.connection.load", # Versioned
+                "params": {
+                    "connectionId": conn_details["connection_id"],
+                    "sourceComponentId": conn_details["source_component_id"],
+                    "sourcePortName": conn_details["source_port_name"],
+                    "targetComponentId": conn_details["target_component_id"],
+                    "targetPortName": conn_details["target_port_name"],
+                }
+            }
+            asyncio.create_task(_send_message(websocket, connection_load_message))
+            logger.debug(f"Sent connection.load for connection ID: {conn_details['connection_id']} to client {getattr(websocket, 'id', 'unknown')}")
 
     associated: str | None = None
     ws_id = getattr(websocket, 'id', 'unknown') # For consistent logging
@@ -542,12 +619,12 @@ async def websocket_handler(
                         if inst: resp["result"] = inst.get_state()
                         else: resp["error"] = {"code": -32001,
                                                "message": f"Component '{current_cid_for_op}' not found for getState"}
-                elif method == "connection.create":
-                    result = await handle_connection_create(params)
+                elif method == "v1.connection.create": # Versioned
+                    result = await handle_connection_create(params, originating_websocket=websocket)
                     if "error" in result: resp["error"] = result["error"]
                     else: resp["result"] = result
-                elif method == "connection.delete":
-                    result = await handle_connection_delete(params)
+                elif method == "v1.connection.delete": # Versioned
+                    result = await handle_connection_delete(params, originating_websocket=websocket)
                     if "error" in result: resp["error"] = result["error"]
                     else: resp["result"] = result
                 else:
@@ -628,6 +705,11 @@ async def websocket_handler(
             logger.debug(
                 f"WS {ws_id}: Websocket not found in client_connections during cleanup."
             )
+
+        if websocket in global_connected_websockets:
+            global_connected_websockets.remove(websocket)
+            logger.info(f"WS {getattr(websocket, 'id', 'unknown')}: Removed from global_connected_websockets. Total: {len(global_connected_websockets)}")
+
         logger.info(f"WS {ws_id}: Finished cleanup.")
 
 async def enhanced_process_request_hook(websocket, request):
