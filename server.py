@@ -330,7 +330,14 @@ async def main():
             )
 
     if AIChatInterfaceBackend:
-        backend_instance_main = AIChatInterfaceBackend()
+        # Define a placeholder send function for the main backend instance
+        async def placeholder_send_output(component_id, output_name, data):
+            print(f"Placeholder send output: {component_id} -> {output_name}: {data}")
+        
+        backend_instance_main = AIChatInterfaceBackend(
+            component_id="main_chat_backend",
+            send_component_output_func=placeholder_send_output
+        )
         print("AIChatInterfaceBackend initialized for main.")
     else:
         print(
